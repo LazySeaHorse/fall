@@ -100,6 +100,12 @@ struct NoteDetector::Impl
         float energyLobe = 1.5f;       // bins around each fitted partial that count as "on the partial"
         float expectedFitMin = 0.20f;  // like expectedMin, for the (stricter, so lower) fitted score
         float fitMinPitch = 55.0f;
+        float oddMin = 0.10f;          // oddShare() an expected key needs (0 = off): rejects the octave above
+        float oddMinPitch = 60.0f;     // keys below this skip the octave check (weak low partials, laptop mic)
+        float oddPre = 0.9f;           // oddShare(): weight of the pre-onset power subtracted
+        float oddFloor = 2.0f;
+        float octaveHintSel = 0.55f;   // displaySel for a key one/two octaves above an expected key         // oddShare(): power under (oddFloor x the local spectral floor)^2 does not count
+        float oddShareCents = 15.0f;   // oddShare(): how far another expected key's partial may sit and still count as shared
         float autoTune = 1.0f;         // 0 = keep the models at A440     // keys below this use the plain window score (bass partials are messy)
     } tune;
 
@@ -331,17 +337,17 @@ struct NoteDetector::Impl
     }
 
     // Name -> tuning field table (also used by the eval tool for sweeps).
-    static constexpr int kNumOverrides = 38;
+    static constexpr int kNumOverrides = 44;
     static const char* overrideName (int i)
     {
         static const char* names[kNumOverrides] = { "zOnset", "zComb", "promLo", "promHi", "newLo", "newHi", "expectedMin",
-                                                    "watchMin", "displayMin", "neighbourMargin", "watchContrast", "settleStrength", "expectedNewRelief", "weakOnsetPenalty", "contrastMin", "watchStrictDb", "chanceCoef", "watchSel", "subharmonicMin", "displaySel", "stage1Bump", "stage2Bump", "watchIndependent", "watchPrefilter", "measuredScale", "tonalTol", "tonalSoft", "explainMin", "explainFloor", "fitTolCents", "fitTolBins", "useFit", "useReassign", "energyMin", "energyLobe", "fitMinPitch", "expectedFitMin", "autoTune" };
+                                                    "watchMin", "displayMin", "neighbourMargin", "watchContrast", "settleStrength", "expectedNewRelief", "weakOnsetPenalty", "contrastMin", "watchStrictDb", "chanceCoef", "watchSel", "subharmonicMin", "displaySel", "stage1Bump", "stage2Bump", "watchIndependent", "watchPrefilter", "measuredScale", "tonalTol", "tonalSoft", "explainMin", "explainFloor", "fitTolCents", "fitTolBins", "useFit", "useReassign", "energyMin", "energyLobe", "fitMinPitch", "expectedFitMin", "autoTune", "oddMin", "oddMinPitch", "oddPre", "oddShareCents", "oddFloor", "octaveHintSel" };
         return names[i];
     }
     float* overridePtr (int i)
     {
         float* p[kNumOverrides] = { &tune.zOnset, &tune.zComb, &tune.promLo, &tune.promHi, &tune.newLo, &tune.newHi, &tune.expectedMin,
-                                    &tune.watchMin, &tune.displayMin, &tune.neighbourMargin, &tune.watchContrast, &tune.settleStrength, &tune.expectedNewRelief, &tune.weakOnsetPenalty, &tune.contrastMin, &tune.watchStrictDb, &tune.chanceCoef, &tune.watchSel, &tune.subharmonicMin, &tune.displaySel, &tune.stage1Bump, &tune.stage2Bump, &tune.watchIndependent, &tune.watchPrefilter, &tune.measuredScale, &tune.tonalTol, &tune.tonalSoft, &tune.explainMin, &tune.explainFloor, &tune.fitTolCents, &tune.fitTolBins, &tune.useFit, &tune.useReassign, &tune.energyMin, &tune.energyLobe, &tune.fitMinPitch, &tune.expectedFitMin, &tune.autoTune };
+                                    &tune.watchMin, &tune.displayMin, &tune.neighbourMargin, &tune.watchContrast, &tune.settleStrength, &tune.expectedNewRelief, &tune.weakOnsetPenalty, &tune.contrastMin, &tune.watchStrictDb, &tune.chanceCoef, &tune.watchSel, &tune.subharmonicMin, &tune.displaySel, &tune.stage1Bump, &tune.stage2Bump, &tune.watchIndependent, &tune.watchPrefilter, &tune.measuredScale, &tune.tonalTol, &tune.tonalSoft, &tune.explainMin, &tune.explainFloor, &tune.fitTolCents, &tune.fitTolBins, &tune.useFit, &tune.useReassign, &tune.energyMin, &tune.energyLobe, &tune.fitMinPitch, &tune.expectedFitMin, &tune.autoTune, &tune.oddMin, &tune.oddMinPitch, &tune.oddPre, &tune.oddShareCents, &tune.oddFloor, &tune.octaveHintSel };
         return p[i];
     }
     bool  overrideSet[kNumOverrides] {};
@@ -876,6 +882,72 @@ struct NoteDetector::Impl
         return all <= 0.0 ? 1.0f : (float) (inside / all);
     }
 
+    // True when a partial of another expected key lies within `halfBins` (plus its own tolerance) of
+    // bin position `centre`.
+    bool sharedWithExpected (int pitch, double centre, double halfBins, const EvBand& b) const noexcept
+    {
+        for (int q = kLowestPianoKey; q <= kHighestPianoKey; ++q)
+        {
+            if (q == pitch || ! expected.test ((size_t) q))
+                continue;
+            const auto& kq = models[(size_t) keyIndex (q)];
+            for (int i = 0; i < kq.n; ++i)
+            {
+                const double hq = (double) kq.hz[i];
+                const double halfQ = hq * (std::pow (2.0, tune.oddShareCents / 1200.0) - 1.0) / b.binHz + tune.energyLobe;
+                if (std::abs (hq / b.binHz - centre) <= halfBins + halfQ)
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    // Octave check. Of the new power on `pitch`'s partials 1..6, the share on the ODD ones (1, 3, 5).
+    // The key an octave above has partials only where this key's EVEN partials are, so playing C7
+    // fills every other partial of C6 and scores almost like C6 itself; the odd partials are what
+    // only C6 can produce. A real note puts a good share there (its fundamental and 3rd partial are
+    // usually its strongest); the octave above puts next to nothing. Partials under 150 Hz (the
+    // laptop mic loses them) or over 6 kHz are not used. Returns 1 when it cannot judge.
+    float oddShare (int pitch, const Fit& fit, const EvBand& b, float tolCents) const noexcept
+    {
+        const auto& kp = models[(size_t) keyIndex (pitch)];
+        if (kp.n == 0)
+            return 1.0f;
+        const double B = inharmonicityB (pitch) * (kp.measured ? 1.0 : 1.0 + fit.beta);
+        // the model's fundamental (includes calibration / auto-tuning), recovered from its first partial
+        const double f1 = kp.hz[0] / ((double) kp.h[0] * std::sqrt (1.0 + B * kp.h[0] * kp.h[0])) * std::pow (2.0, fit.c / 1200.0);
+        double odd = 0.0, even = 0.0;
+        int nOdd = 0, nEven = 0;
+        for (int h = 1; h <= 6; ++h)
+        {
+            const double hz = partialHz (f1, B, h);
+            if (hz < 150.0 || hz > 6000.0)
+                continue;
+            const double half = hz * (std::pow (2.0, tolCents / 1200.0) - 1.0) / b.binHz + tune.energyLobe;
+            const int a = std::max (b.kLo, (int) std::floor (hz / b.binHz - half));
+            const int c = std::min (b.kHi, (int) std::ceil (hz / b.binHz + half));
+            if (sharedWithExpected (pitch, hz / b.binHz, half, b))
+                continue; // another expected key (the octave above, a fifth below ...) also lands here
+            double m = 0.0;
+            for (int k = a; k <= c; ++k)
+            {
+                // the old ringing (an earlier note, the pedal) decays a little between the two windows
+                // ... and a hammer thump or key noise lifts every bin: only power above the local
+                // floor (lower quartile of the spectrum around here, see computeEvidence) counts
+                const double post = (double) magP[(size_t) k] * magP[(size_t) k];
+                const double floorMag = tune.oddFloor * std::exp ((double) lnCum[(size_t) k]);
+                const double pre = std::max (tune.oddPre * (double) magR[(size_t) k] * magR[(size_t) k], floorMag * floorMag);
+                m = std::max (m, post > pre ? post - pre : 0.0);
+            }
+            if (h % 2 != 0) { odd += m; ++nOdd; } else { even += m; ++nEven; }
+        }
+        if (nOdd == 0 || nEven == 0 || odd + even <= 0.0)
+            return 1.0f;
+        // per-partial averages, so a key with partials 3, 5 (odd) and 2, 4, 6 (even) isn't biased
+        const double o = odd / nOdd, e = even / nEven;
+        return (float) (o / (o + e));
+    }
+
     // Score over only those partials that no octave (h even) or twelfth (h multiple of 3) of a
     // lower note can produce: h = 1, 5, 7, 11, 13 ... Needs at least three of them, else -1.
     float scoreIndependent (const KeyPartials& kp, const float* e, const EvBand& b) const noexcept
@@ -993,10 +1065,21 @@ struct NoteDetector::Impl
         return false;
     }
 
+    // True when `pitch`'s partials are lit up only where the key an octave (or two) above has its own:
+    // the user played the octave above, not this key.
+    bool octaveAbove (int pitch, const Fit& fit, const EvBand& b, float tolCents) const noexcept
+    {
+        if (tune.oddMin <= 0.0f || (float) pitch < tune.oddMinPitch)
+            return false;
+        return oddShare (pitch, fit, b, tolCents) < tune.oddMin;
+    }
+
     struct Picks { int n = 0; int pitch[kMaxPicks] {}; float f[kMaxPicks] {}; };
 
     // Greedy explain-and-subtract: strongest key first, its partials are damped, repeat.
-    Picks greedy (const EvBand& b, float minScore, float minSel)
+    // hintBase: expected keys not heard yet for this onset; a key one or two octaves above one of them
+    // is shown more readily (see octaveHintSel)
+    Picks greedy (const EvBand& b, float minScore, float minSel, const PitchSet& hintBase = {})
     {
         std::copy (evid.begin(), evid.end(), evidWork.begin());
         Picks pk;
@@ -1013,13 +1096,25 @@ struct NoteDetector::Impl
                 const float sel = sc[i] - tune.chanceCoef * models[(size_t) i].chance;
                 if (sel > bestSel) { bestSel = sel; bestF = sc[i]; best = i; }
             }
-            if (best < 0 || bestF < minScore || bestSel < minSel)
+           #ifdef FALL_DETECT_TRACE
+            if (best >= 0)
+                std::fprintf (stderr, "[trace] display pick %d F=%.2f sel=%.2f (need %.2f / %.2f)\n", kLowestPianoKey + best, (double) bestF, (double) bestSel, (double) minScore, (double) minSel);
+           #endif
+            // a key one or two octaves above an expected key is shown more readily: that is the
+            // classic mistake (C7 for C6), the expected-key check rejects it, and the user should see why
+            const bool octaveOfExpected = best >= 0 && minSel > 0.0f
+                                          && ((best >= 12 && hintBase.test ((size_t) (kLowestPianoKey + best - 12)))
+                                              || (best >= 24 && hintBase.test ((size_t) (kLowestPianoKey + best - 24))));
+            const float needSel = octaveOfExpected ? std::min (minSel, tune.octaveHintSel) : minSel;
+            if (best < 0 || bestF < minScore || bestSel < needSel)
                 break;
-            // octave / twelfth ambiguity: a lower key whose series also fits explains the note
+            // octave / twelfth ambiguity: a lower key whose series also fits explains the note,
+            // unless that key's own (odd) partials are missing: then it really is the upper key
             for (int d : { 12, 19, 24 })
             {
                 const int q = best - d;
-                if (q >= 0 && sc[q] >= 0.9f * bestF && sc[q] >= minScore)
+                if (q >= 0 && sc[q] >= 0.9f * bestF && sc[q] >= minScore
+                    && ! (d != 19 && octaveAbove (kLowestPianoKey + q, Fit(), b, tune.oddShareCents)))
                 {
                     best = q;
                     bestF = sc[q];
@@ -1177,15 +1272,19 @@ struct NoteDetector::Impl
                     const float f = useFitFor (pitch) ? scoreFit (pitch, evidExp.data(), b, &fit)
                                                        : score (models[(size_t) keyIndex (pitch)], evidExp.data(), b);
                    #ifdef FALL_DETECT_TRACE
-                    std::fprintf (stderr, "[trace] onset %.3f stage %d expected %d F=%.2f null=%.2f\n", (double) p.pos / fs, stage, pitch, (double) f, (double) nullLevel (pitch, evidExp.data(), b));
+                    std::fprintf (stderr, "[trace] onset %.3f stage %d expected %d F=%.2f null=%.2f odd=%.3f\n", (double) p.pos / fs, stage, pitch, (double) f, (double) nullLevel (pitch, evidExp.data(), b), (double) oddShare (pitch, fit, b, tune.fitTolCents));
                    #endif
                     const float needed = (useFitFor (pitch) ? tune.expectedFitMin : tune.expectedMin) + neededExtra;
                     if (f >= needed * (models[(size_t) keyIndex (pitch)].measured ? tune.measuredScale : 1.0f) && f - nullLevel (pitch, evidExp.data(), b) >= tune.contrastMin && ! betterNeighbour (pitch, f, b)
                         && (tune.explainMin <= 0.0f || explainedRatio (pitch, b) >= tune.explainMin)
-                        && (tune.energyMin <= 0.0f || energyRatio (pitch, fit, b) >= tune.energyMin))
+                        && (tune.energyMin <= 0.0f || energyRatio (pitch, fit, b) >= tune.energyMin)
+                        && ! octaveAbove (pitch, fit, b, useFitFor (pitch) ? tune.fitTolCents : tune.oddShareCents))
                     {
                         newExp.set ((size_t) pitch);
                         p.hitExp.set ((size_t) pitch);
+                       #ifdef FALL_DETECT_TRACE
+                        std::fprintf (stderr, "[trace] ACCEPT onset %.3f stage %d expected %d F=%.2f odd=%.3f\n", (double) p.pos / fs, stage, pitch, (double) f, (double) oddShare (pitch, fit, b, tune.fitTolCents));
+                       #endif
                         if (useFitFor (pitch) && ! models[(size_t) keyIndex (pitch)].measured)
                             noteFitted (fit.c);
                     }
@@ -1204,7 +1303,7 @@ struct NoteDetector::Impl
 
             if (stage == 2 || (clamped && stage >= 1))
             {
-                const Picks pk = greedy (b, tune.displayMin, tune.displaySel);
+                const Picks pk = greedy (b, tune.displayMin, tune.displaySel, expected & ~p.hitExp);
                 for (int i = 0; i < pk.n; ++i)
                     shown.set ((size_t) pk.pitch[i]);
             }
