@@ -29,7 +29,8 @@ public:
         header (p, "Instrument");
         addRow (p, "Plays the song", instrument);
         instrument.onChange = [this] { if (! updating && onInstrumentChosen) onInstrumentChosen (instrument.getSelectedItemIndex()); };
-        addButtons (p, { { &rescan, "Find instruments" }, { &addFile, "Add .vst3..." } });
+        addButtons (p, { { &rescan, "Find instruments" }, { &addFile, "Add plugin file..." } });
+        hint (p, instrumentHint);
         addButtons (p, { { &showWindow, "Open instrument window" } });
         rescan.onClick     = [this] { if (onRescan) onRescan(); };
         addFile.onClick    = [this] { if (onAddPluginFile) onAddPluginFile(); };
@@ -78,8 +79,10 @@ public:
         closeButton.onClick = [this] { if (onClose) onClose(); };
     }
 
-    void setInstruments (const juce::StringArray& names, int selectedIndex, bool scanning)
+    void setInstruments (const juce::StringArray& names, int selectedIndex, bool scanning, const juce::String& note = {})
     {
+        if (instrumentHint != nullptr)
+            instrumentHint->setText (note.isNotEmpty() ? note : "VST3 and older .dll instruments are supported.", juce::dontSendNotification);
         updating = true;
         instrument.clear (juce::dontSendNotification);
         instrument.addItem ("Built-in piano", 1);
@@ -256,6 +259,7 @@ private:
     Switch playMyPart, micEnabled, showNames;
     Meter meter;
     juce::Label* calibrationHint = nullptr;
+    juce::Label* instrumentHint = nullptr;
 
     struct CloseButton : Pressable
     {

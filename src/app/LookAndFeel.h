@@ -14,7 +14,7 @@ public:
     void refresh()
     {
         const auto& p = theme::palette();
-        auto scheme = p.dark ? getDarkColourScheme() : getLightColourScheme();
+        auto scheme = getDarkColourScheme();
         scheme.setUIColour (ColourScheme::windowBackground, p.window);
         scheme.setUIColour (ColourScheme::widgetBackground, p.raised);
         scheme.setUIColour (ColourScheme::menuBackground, p.bar);

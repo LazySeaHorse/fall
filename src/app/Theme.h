@@ -25,34 +25,20 @@ namespace theme
         return p;
     }
 
-    inline void setDark (bool dark)
+    // Fall is dark-only: it's a stage, and dark keeps the falling notes vivid.
+    inline void init()
     {
         auto& p = palette();
-        p.dark = dark;
-        if (dark)
-        {
-            p.window      = juce::Colour (0xff0c0c10);
-            p.bar         = juce::Colour (0xff17171c);
-            p.raised      = juce::Colour (0xff26262d);
-            p.raisedHover = juce::Colour (0xff31313a);
-            p.text        = juce::Colour (0xfff5f5f7);
-            p.textDim     = juce::Colour (0xffa1a1aa);
-            p.textFaint   = juce::Colour (0xff6b6b75);
-            p.separator   = juce::Colour (0x1affffff);
-            p.accent      = juce::Colour (0xff0a84ff);
-        }
-        else
-        {
-            p.window      = juce::Colour (0xfff2f2f5);
-            p.bar         = juce::Colour (0xfffbfbfd);
-            p.raised      = juce::Colour (0xffe9e9ee);
-            p.raisedHover = juce::Colour (0xffdedee5);
-            p.text        = juce::Colour (0xff1d1d1f);
-            p.textDim     = juce::Colour (0xff6e6e73);
-            p.textFaint   = juce::Colour (0xffa1a1a6);
-            p.separator   = juce::Colour (0x14000000);
-            p.accent      = juce::Colour (0xff007aff);
-        }
+        p.dark        = true;
+        p.window      = juce::Colour (0xff0c0c10);
+        p.bar         = juce::Colour (0xff17171c);
+        p.raised      = juce::Colour (0xff26262d);
+        p.raisedHover = juce::Colour (0xff31313a);
+        p.text        = juce::Colour (0xfff5f5f7);
+        p.textDim     = juce::Colour (0xffa1a1aa);
+        p.textFaint   = juce::Colour (0xff6b6b75);
+        p.separator   = juce::Colour (0x1affffff);
+        p.accent      = juce::Colour (0xff0a84ff);
     }
 
     // The stage (waterfall) is always dark: it's a light show, and it keeps contrast high.
