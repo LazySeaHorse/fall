@@ -46,5 +46,6 @@ if(FALL_BUILD_TESTS)
 endif()
 
 if(FALL_BUILD_TESTSYNTH)
+    enable_testing()  # plugin_host test is registered from tools/testsynth
     add_subdirectory(tools/testsynth)
 endif()
