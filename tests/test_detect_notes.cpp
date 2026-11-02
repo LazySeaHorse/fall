@@ -345,3 +345,40 @@ TEST_CASE ("the auto-tuner follows a piano that is not tuned to A440", "[detect]
     CHECK (std::abs (cents + 30.0f) < 6.0f);
     CHECK (hitsLate >= 14); // of the 16 notes after the tuner settled
 }
+
+TEST_CASE ("the octave above does not satisfy an expected note, and is shown for what it is", "[detect]")
+{
+    // C7 has a partial wherever C6 has an even one, so it scores almost like C6. Learners do play the
+    // right key in the wrong octave; it must not count, and the display must show the key they hit.
+    const int keys[] = { 60, 62, 64, 67, 69, 72, 76, 77, 79, 83, 84, 88 };
+    for (float sens : { 0.6f, 0.8f })
+    {
+        int accepted = 0, shownRight = 0, total = 0, rightHits = 0;
+        for (int p : keys)
+            for (int up : { 12, 24 })
+            {
+                if (p + up > 108)
+                    continue;
+                ++total;
+                NoteDetector det;
+                det.prepare (48000.0, kBlock);
+                det.setSensitivity (sens);
+                det.setExpected (setOf ({ p }));
+                const auto audio = renderScene ({ { p + up, 1.0, 0.8, 0.7f } }, 3.0, Environment());
+                bool hit = false, shown = false;
+                for (auto& r : stream (det, audio, 48000.0, kBlock))
+                {
+                    hit = hit || r.onset.expectedHits.test ((size_t) p);
+                    shown = shown || r.onset.pitches.test ((size_t) (p + up));
+                }
+                accepted += hit ? 1 : 0;
+                shownRight += shown ? 1 : 0;
+                // sanity: the right key in the same scene is heard
+                rightHits += run ({ { p, 1.0, 0.8, 0.7f } }, 3.0, setOf ({ p }), p, {}, kBlock, sens).hit ? 1 : 0;
+            }
+        INFO ("sensitivity " << sens << ": octave accepted " << accepted << ", shown " << shownRight << ", right key heard " << rightHits << " of " << total);
+        CHECK (accepted <= 1);
+        CHECK (shownRight >= total - 3);
+        CHECK (rightHits == total);
+    }
+}
