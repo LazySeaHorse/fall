@@ -766,12 +766,13 @@ void MainComponent::addMarker (double t)
     Marker m;
     m.time = std::max (0.0, t);
     m.name = "Marker " + juce::String ((int) markers.size() + 1);
-    // Default jump keys: A0, B0, C1 ... the far left of the keyboard, where songs rarely go.
-    static const int defaults[] = { 21, 23, 24, 26, 28 };
+    // Default jump keys: the top white keys (C8, B7, A7...). Songs rarely go there, and unlike the
+    // lowest keys they're easy to tell apart through a laptop mic (A0/B0 overtones hide in bass chords).
+    static const int defaults[] = { 108, 107, 105, 103, 101 };
     for (int d : defaults)
     {
         const bool used = std::any_of (markers.begin(), markers.end(), [d] (const Marker& x) { return x.triggerPitch == d; });
-        if (! used && d < song->lowestPitch) { m.triggerPitch = d; break; }
+        if (! used && d > song->highestPitch) { m.triggerPitch = d; break; }
     }
     markers.push_back (m);
     std::sort (markers.begin(), markers.end(), [] (const Marker& a, const Marker& b) { return a.time < b.time; });

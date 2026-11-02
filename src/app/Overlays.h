@@ -125,12 +125,13 @@ public:
 
         addAndMakeVisible (keyBox);
         keyBox.addItem ("No key", 1);
-        // Extreme keys first: they almost never appear in music, so they make safe jump keys.
-        const int suggested[] = { 21, 22, 23, 24, 108, 107, 106 };
+        // Top keys first: rare in music and the most reliably heard; the lowest keys come last
+        // because their overtones blend into ordinary bass notes.
+        const int suggested[] = { 108, 107, 106, 105, 104, 21, 22, 23 };
         keyBox.addSectionHeading ("Suggested");
         for (int p : suggested) keyBox.addItem (noteName (p), p + 2);
         keyBox.addSectionHeading ("All keys");
-        for (int p = 25; p <= 105; ++p) keyBox.addItem (noteName (p), p + 2);
+        for (int p = 24; p <= 103; ++p) keyBox.addItem (noteName (p), p + 2);
         keyBox.setSelectedId (pitch >= 0 ? pitch + 2 : 1, juce::dontSendNotification);
         keyBox.onChange = [this] { changed(); };
 
