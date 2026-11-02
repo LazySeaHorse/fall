@@ -18,6 +18,14 @@ FetchContent_Declare(JUCE
     GIT_SHALLOW    TRUE)
 FetchContent_MakeAvailable(JUCE)
 
+# FST: GPLv3 reverse-engineered VST2 headers, so Fall can host older .dll instruments
+# (Steinberg no longer distributes the VST2 SDK). Header-only; we don't build its CMake project.
+FetchContent_Declare(FST
+    GIT_REPOSITORY https://git.iem.at/zmoelnig/FST.git
+    GIT_TAG        647af068765b75867e3a28b4dd8991ab9ed47f7c
+    SOURCE_SUBDIR  do-not-build)
+FetchContent_MakeAvailable(FST)
+
 # Shared JUCE flags for every target we build.
 add_library(fall_juce_flags INTERFACE)
 target_compile_definitions(fall_juce_flags INTERFACE
