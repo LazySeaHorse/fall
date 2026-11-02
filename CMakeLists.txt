@@ -52,6 +52,7 @@ if(FALL_BUILD_TESTS)
     FetchContent_MakeAvailable(Catch2)
     enable_testing()
     add_subdirectory(tests)
+    add_subdirectory(tools/detect_eval)
 endif()
 
 if(FALL_BUILD_TESTSYNTH)
