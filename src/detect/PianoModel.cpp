@@ -30,7 +30,7 @@ namespace
 
     double genericWeight (int h, double f, double sampleRate) noexcept
     {
-        return std::pow ((double) h, -0.35) * micResponse (f, sampleRate);
+        return std::pow ((double) h, -0.6) * micResponse (f, sampleRate);
     }
 
     void normalise (KeyPartials& kp) noexcept
@@ -43,8 +43,13 @@ namespace
             kp.n = 0;
             return;
         }
+        double sq = 0.0;
         for (int i = 0; i < kp.n; ++i)
+        {
             kp.w[i] = (float) ((double) kp.w[i] / sum);
+            sq += (double) kp.w[i] * (double) kp.w[i];
+        }
+        kp.chance = (float) std::sqrt (sq); // = 1 / sqrt (n_eff) for weights summing to one
     }
 
     // Generic model, optionally bent: tuneCents shifts everything, B overrides the default.

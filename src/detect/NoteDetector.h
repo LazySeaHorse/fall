@@ -77,6 +77,10 @@ public:
     // Smoothed input level in dBFS, for an input meter.
     float getInputLevelDb() const noexcept;
 
+    // Developer hook for the eval tool: override one tuning constant by name (e.g. "expectedMin"),
+    // applied on top of the sensitivity mapping. Returns false for unknown names. Not for the app.
+    bool setTuningOverride (const juce::String& name, float value);
+
     // --- Calibration capture: the user plays one key, we store its fingerprint. ---
     // Starts listening for the next clear onset and assigns it to `pitch`.
     void beginCapture (int pitch);

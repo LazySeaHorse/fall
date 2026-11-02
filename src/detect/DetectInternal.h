@@ -45,6 +45,7 @@ struct KeyPartials
     float hi[kMaxPartials] {};
     float w[kMaxPartials] {};    // weight; sums to 1
     int   h[kMaxPartials] {};    // harmonic number
+    float chance = 0.0f;         // 1 / sqrt (effective number of partials): how easily noise alone fills the series
 };
 
 // Builds the partial series for all 88 keys: the generic piano model for uncalibrated keys
