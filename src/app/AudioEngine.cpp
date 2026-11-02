@@ -1,5 +1,10 @@
 #include "AudioEngine.h"
 
+#if JUCE_WINDOWS
+namespace juce { extern bool fallWasapiRawInput; } // cmake/PatchJuceWasapiRaw.cmake
+#endif
+
+
 namespace fall
 {
 
@@ -15,6 +20,22 @@ AudioEngine::~AudioEngine()
 {
     deviceManager.removeAudioCallback (this);
     deviceManager.closeAudioDevice();
+}
+
+void AudioEngine::setRawMicrophone (bool raw)
+{
+   #if JUCE_WINDOWS
+    if (juce::fallWasapiRawInput == raw)
+        return;
+    juce::fallWasapiRawInput = raw;
+    if (deviceManager.getCurrentAudioDevice() != nullptr)
+    {
+        deviceManager.closeAudioDevice();
+        deviceManager.restartLastAudioDevice();
+    }
+   #else
+    juce::ignoreUnused (raw);
+   #endif
 }
 
 juce::String AudioEngine::openDevices (const juce::XmlElement* savedState)
@@ -38,6 +59,8 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     const int capacity = std::max (blockSize, 64) * 2;
     mono.allocate ((size_t) capacity, true);
     detector.prepare (sampleRate, capacity);
+    recorder.prepare (sampleRate);
+    expectedGroups = -1; // re-send the expected chord to the fresh detector
     previewCollector.reset (sampleRate);
     fallback.prepare (sampleRate);
 
@@ -95,6 +118,7 @@ void AudioEngine::processBlock (const float* const* inputs, int numIn, float* co
         // 2. Detector -> player (learn mode / jump keys).
         if (activeIn > 0 && micEnabled.load())
         {
+            recorder.push (mono.get(), numSamples);
             const int found = detector.process (mono.get(), numSamples, onsets.data(), (int) onsets.size());
             for (int i = 0; i < found; ++i)
             {
@@ -107,12 +131,14 @@ void AudioEngine::processBlock (const float* const* inputs, int numIn, float* co
                 e.wallMs    = juce::Time::getMillisecondCounterHiRes();
                 e.latencyMs = (float) (1000.0 * (double) (o.reportedAt - o.samplePosition) / sampleRate);
                 pushHeard (e);
+                recorder.logHeard (o.samplePosition, e.pitches, e.accepted, e.latencyMs);
             }
             if (player.getGroupsCompleted() != expectedGroups || player.nextGroupTime() != expectedGate)
             {
                 expectedGroups = player.getGroupsCompleted();
                 expectedGate = player.nextGroupTime();
                 detector.setExpected (player.expectedPitches());
+                recorder.logExpected (player.expectedPitches());
             }
             detector.setWatchKeys (player.jumpKeys());
             inputDb.store (detector.getInputLevelDb());

@@ -4,6 +4,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "FallbackSynth.h"
+#include "MicRecorder.h"
 #include "core/Player.h"
 #include "detect/NoteDetector.h"
 
@@ -86,6 +87,19 @@ public:
     float getInputLevelDb() const noexcept { return inputDb.load(); }
     bool  hasInput() const noexcept { return numInputs.load() > 0; }
 
+    // The piano's tuning in cents from A440 (see NoteDetector::getTuningCents).
+    float getTuningCents (bool& confident) const noexcept { return detector.getTuningCents (&confident); }
+
+    // Windows: ask for the raw microphone stream, skipping Windows' voice processing (noise
+    // suppression, auto gain). Reopens the audio device when the setting changes.
+    void setRawMicrophone (bool raw);
+
+    // Writes the last ~90 s of microphone audio + what was expected/heard (see MicRecorder).
+    juce::File saveRecording (const juce::File& folder, const juce::String& notes, juce::String& error) const
+    {
+        return recorder.save (folder, notes, error);
+    }
+
     // Things the mic heard since the last call (message thread).
     int popHeard (HeardEvent* out, int maxEvents);
 
@@ -112,6 +126,7 @@ private:
     juce::CriticalSection instrumentLock;
     std::unique_ptr<juce::AudioPluginInstance> instrument;
     FallbackSynth fallback;
+    MicRecorder recorder;
     juce::MidiMessageCollector previewCollector;
 
     juce::AudioBuffer<float> renderBuffer;

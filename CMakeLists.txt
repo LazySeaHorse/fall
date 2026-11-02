@@ -17,6 +17,7 @@ FetchContent_Declare(JUCE
     GIT_TAG        8.0.12
     GIT_SHALLOW    TRUE)
 FetchContent_MakeAvailable(JUCE)
+include(cmake/PatchJuceWasapiRaw.cmake)
 
 # FST: GPLv3 reverse-engineered VST2 headers, so Fall can host older .dll instruments
 # (Steinberg no longer distributes the VST2 SDK). Header-only; we don't build its CMake project.
