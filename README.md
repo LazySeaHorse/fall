@@ -77,7 +77,7 @@ Fall --screenshot shot.png --midi tests/data/ode_to_joy.mid --mode learn --seek 
 ```
 
 The flags are `--frames-dir DIR`, `--loop A:B`, `--marker T:PITCH:NAME`, `--hands left|right`,
-`--speed X`, `--settings`, `--calibrate`, `--auto-learn` and `--light`. See `LaunchOptions` in
+`--speed X`, `--settings`, `--calibrate` and `--auto-learn`. See `LaunchOptions` in
 `src/app/MainComponent.h`.
 
 ## Layout
