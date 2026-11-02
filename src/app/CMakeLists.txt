@@ -25,7 +25,9 @@ target_link_libraries(Fall PRIVATE
     juce::juce_gui_extra
     juce::juce_audio_utils
     juce::juce_audio_processors
-    juce::juce_animation
     juce::juce_recommended_config_flags
-    juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags)
+
+if(FALL_LTO)
+    target_link_libraries(Fall PRIVATE juce::juce_recommended_lto_flags)
+endif()

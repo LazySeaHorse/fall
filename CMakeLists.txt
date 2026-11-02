@@ -8,6 +8,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(FALL_BUILD_APP       "Build the Fall desktop app"                  ON)
 option(FALL_BUILD_TESTS     "Build unit tests"                            ON)
 option(FALL_BUILD_TESTSYNTH "Build the tiny VST3 synth used by CI tests"  OFF)
+option(FALL_LTO             "Link-time optimisation for the app (slow links)" ON)
 
 include(FetchContent)
 # Tip: -DFETCHCONTENT_SOURCE_DIR_JUCE=/path/to/JUCE to reuse a local checkout.
