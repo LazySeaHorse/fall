@@ -22,11 +22,26 @@
 #include <map>
 #include <sstream>
 #include <tuple>
+#if JUCE_LINUX || JUCE_MAC || JUCE_BSD
+ #include <time.h>
+#endif
 
 using namespace fall;
 
 namespace
 {
+// CPU time of the calling thread (immune to the machine being busy); wall clock where unavailable.
+double threadSeconds()
+{
+   #if JUCE_LINUX || JUCE_MAC || JUCE_BSD
+    timespec ts;
+    clock_gettime (CLOCK_THREAD_CPUTIME_ID, &ts);
+    return (double) ts.tv_sec + 1e-9 * (double) ts.tv_nsec;
+   #else
+    return std::chrono::duration<double> (std::chrono::steady_clock::now().time_since_epoch()).count();
+   #endif
+}
+
 struct Options
 {
     std::vector<std::pair<juce::File, juce::File>> pairs;
@@ -34,12 +49,13 @@ struct Options
     int    block = 480;       // samples per process() call (0 = pseudo-random 128..1024)
     float  sens = 0.6f;
     double timeout = 1.0;     // learn mode: give up on a chord this long after its last note
-    juce::File csvOut;
+    juce::File csvOut, makeCal;
     juce::File calibration;
     bool   learn = true, wrong = true, display = true;
     bool   perFile = true;
     double resample = 0.0;    // pretend the recording has this sample rate (for testing only)
     bool   verbose = false;
+    std::vector<std::pair<juce::String, float>> params; // --param name=value (tuning overrides)
 };
 
 struct Truth
@@ -140,8 +156,13 @@ struct LearnStats
 
 struct WrongStats
 {
-    int total[4] {}, accepted[4] {};
-    void add (const WrongStats& o) { for (int i = 0; i < 4; ++i) { total[i] += o.total[i]; accepted[i] += o.accepted[i]; } }
+    // [0] = nothing but the played chord is sounding, [1] = other notes are still ringing
+    int total[2][4] {}, accepted[2][4] {};
+    void add (const WrongStats& o)
+    {
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < 4; ++i) { total[c][i] += o.total[c][i]; accepted[c][i] += o.accepted[c][i]; }
+    }
 };
 
 struct WatchStats
@@ -167,6 +188,7 @@ struct DisplayStats
 struct CpuStats
 {
     double seconds = 0, audio = 0, worstBlockMs = 0;
+    std::vector<double> blockMs; // every process() call, for percentiles
 };
 
 // --- running the detector ---------------------------------------------------------------------
@@ -194,11 +216,12 @@ public:
                 bs = 128 + (int) ((rng >> 16) % 897u);
             }
             const int n = (int) std::min<size_t> ((size_t) bs, audio.size() - i);
-            const auto t0 = std::chrono::steady_clock::now();
+            const double t0 = threadSeconds();
             const int cnt = det.process (audio.data() + i, n, buf.data(), (int) buf.size());
-            const double dt = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
+            const double dt = threadSeconds() - t0;
             cpu.seconds += dt;
             cpu.worstBlockMs = std::max (cpu.worstBlockMs, dt * 1000.0);
+            cpu.blockMs.push_back (dt * 1000.0 * 480.0 / (double) n); // normalised to a 10 ms block
             i += (size_t) n;
             const double endT = (double) i / rate;
             evs.clear();
@@ -221,6 +244,9 @@ void setup (NoteDetector& det, double rate, const Options& opt)
 {
     det.prepare (rate, 2048);
     det.setSensitivity (opt.sens);
+    for (auto& [name, value] : opt.params)
+        if (! det.setTuningOverride (name, value))
+            std::fprintf (stderr, "unknown parameter %s\n", name.toRawUTF8());
     PitchSet w;
     w.set (21); w.set (23); w.set (108);
     det.setWatchKeys (w);
@@ -368,12 +394,14 @@ void runWrong (const std::vector<float>& audio, double rate, const Truth& tr, co
 
         // distractor chord per group: shifted pitches that are not part of what actually sounds then
         std::vector<PitchSet> distract (G.size());
+        std::vector<int> context (G.size(), 0);
         for (size_t g = 0; g < G.size(); ++g)
         {
             PitchSet sounding;
             for (auto& n : S.notes)
                 if (n.start < G[g].time + 0.15 && n.end > G[g].time - 0.6)
                     sounding.set ((size_t) n.pitch);
+            context[g] = (sounding & ~G[g].pitches).any() ? 1 : 0;
             for (size_t p = 21; p <= 108; ++p)
                 if (G[g].pitches.test (p))
                 {
@@ -387,8 +415,8 @@ void runWrong (const std::vector<float>& audio, double rate, const Truth& tr, co
         PitchSet accepted;
         auto finish = [&]
         {
-            st.total[si] += (int) distract[cur].count();
-            st.accepted[si] += (int) accepted.count();
+            st.total[context[cur]][si] += (int) distract[cur].count();
+            st.accepted[context[cur]][si] += (int) accepted.count();
             accepted.reset();
             ++cur;
         };
@@ -509,10 +537,14 @@ void printLearn (const char* title, const LearnStats& l, const WatchStats& w, co
 void printWrong (const WrongStats& w)
 {
     const char* names[4] = { "+1 semitone", "-1 semitone", "+2 semitones", "+7 (fifth)" };
-    std::printf ("  wrong-note false accepts (expected chord = real chord shifted):");
-    for (int i = 0; i < 4; ++i)
-        std::printf ("  %s %d/%d = %.1f%%", names[i], w.accepted[i], w.total[i], 100.0 * w.accepted[i] / std::max (1, w.total[i]));
-    std::printf ("\n");
+    const char* ctx[2] = { "clean context", "dense context" };
+    for (int c = 0; c < 2; ++c)
+    {
+        std::printf ("  wrong-note false accepts, %s:", ctx[c]);
+        for (int i = 0; i < 4; ++i)
+            std::printf ("  %s %d/%d = %.1f%%", names[i], w.accepted[c][i], w.total[c][i], 100.0 * w.accepted[c][i] / std::max (1, w.total[c][i]));
+        std::printf ("\n");
+    }
 }
 
 void printDisplay (const DisplayStats& d)
@@ -540,8 +572,9 @@ void printDisplay (const DisplayStats& d)
 
 void printCpu (const CpuStats& c)
 {
-    std::printf ("  cpu: %.2f ms per second of audio (%.3f%% of one core), worst single process() call %.2f ms\n",
-                 1000.0 * c.seconds / std::max (1e-9, c.audio), 100.0 * c.seconds / std::max (1e-9, c.audio), c.worstBlockMs);
+    std::printf ("  cpu: %.2f ms per second of audio (%.3f%% of one core); per 10 ms block: p99 %.2f ms, p99.9 %.2f ms; worst single process() call %.2f ms\n",
+                 1000.0 * c.seconds / std::max (1e-9, c.audio), 100.0 * c.seconds / std::max (1e-9, c.audio),
+                 percentile (c.blockMs, 0.99), percentile (c.blockMs, 0.999), c.worstBlockMs);
 }
 
 void dumpCsv (const juce::File& f, const std::vector<Event>& evs)
@@ -561,11 +594,54 @@ void dumpCsv (const juce::File& f, const std::vector<Event>& evs)
     f.replaceWithText (os.str());
 }
 
+// Builds a calibration file from a recording in which every key is played once (e.g. scale.wav):
+// arms a capture shortly before each key's first strike, stores the fingerprint when it finishes.
+bool makeCalibration (const std::vector<float>& audio, double rate, const Truth& tr, const Options& opt, const juce::File& out)
+{
+    NoteDetector det;
+    setup (det, rate, opt);
+    Calibration cal;
+    std::vector<DetectedOnset> buf (64);
+    size_t pos = 0;
+    int stored = 0, tried = 0;
+    PitchSet done;
+    for (auto& n : tr.song.notes)
+    {
+        if (done.test ((size_t) n.pitch))
+            continue;
+        done.set ((size_t) n.pitch);
+        ++tried;
+        const size_t armAt = (size_t) std::max (0.0, (n.start - 0.25) * rate);
+        const size_t until = (size_t) ((n.start + 0.45) * rate);
+        while (pos < armAt && pos < audio.size())
+        {
+            const size_t k = std::min<size_t> (480, audio.size() - pos);
+            det.process (audio.data() + pos, (int) k, buf.data(), (int) buf.size());
+            pos += k;
+        }
+        det.beginCapture (n.pitch);
+        while (pos < until && pos < audio.size())
+        {
+            const size_t k = std::min<size_t> (480, audio.size() - pos);
+            det.process (audio.data() + pos, (int) k, buf.data(), (int) buf.size());
+            pos += k;
+        }
+        if (det.captureFinished())
+        {
+            det.storeCapture (cal);
+            ++stored;
+        }
+    }
+    std::printf ("calibration: stored %d of %d keys\n", stored, tried);
+    const auto mb = cal.toBinary();
+    return out.replaceWithData (mb.getData(), mb.getSize());
+}
+
 void usage()
 {
     std::puts ("usage: fall_detect_eval <audio.wav> <truth.mid|csv> [<audio2> <truth2> ...] [options]\n"
                "       fall_detect_eval --dir <wavdir> --truth <truthdir> [options]   (pairs by file name; .mid or .csv)\n"
-               "options: --offset <s>  --block <n|0=random>  --sens <0..1>  --timeout <s>  --csv <file>  --calibration <file>\n"
+               "options: --make-calibration <out.cal> (uses the first pair: a recording of every key played once)\n         --offset <s>  --block <n|0=random>  --sens <0..1>  --timeout <s>  --csv <file>  --calibration <file>\n"
                "         --only learn|wrong|display (default all)  --quiet (totals only)  --names a,b,c (with --dir)");
 }
 } // namespace
@@ -585,10 +661,17 @@ int main (int argc, char** argv)
         else if (a == "--sens") opt.sens = next().getFloatValue();
         else if (a == "--timeout") opt.timeout = next().getDoubleValue();
         else if (a == "--csv") opt.csvOut = juce::File::getCurrentWorkingDirectory().getChildFile (next());
+        else if (a == "--make-calibration") opt.makeCal = juce::File::getCurrentWorkingDirectory().getChildFile (next());
         else if (a == "--calibration") opt.calibration = juce::File::getCurrentWorkingDirectory().getChildFile (next());
         else if (a == "--dir") dir = juce::File::getCurrentWorkingDirectory().getChildFile (next());
         else if (a == "--truth") truthDir = juce::File::getCurrentWorkingDirectory().getChildFile (next());
         else if (a == "--names") names = juce::StringArray::fromTokens (next(), ",", "");
+        else if (a == "--param")
+        {
+            const auto kv = juce::StringArray::fromTokens (next(), "=", "");
+            if (kv.size() == 2)
+                opt.params.push_back ({ kv[0], kv[1].getFloatValue() });
+        }
         else if (a == "--quiet") opt.perFile = false;
         else if (a == "--verbose" || a == "-v") opt.verbose = true;
         else if (a == "--only")
@@ -620,6 +703,20 @@ int main (int argc, char** argv)
     {
         usage();
         return 1;
+    }
+
+    if (opt.makeCal != juce::File())
+    {
+        std::vector<float> audio;
+        double rate = 48000;
+        Truth truth;
+        juce::String err;
+        if (! loadAudio (opt.pairs[0].first, audio, rate) || ! loadTruth (opt.pairs[0].second, opt.offset, truth, err))
+        {
+            std::fprintf (stderr, "cannot load calibration source\n");
+            return 2;
+        }
+        return makeCalibration (audio, rate, truth, opt, opt.makeCal) ? 0 : 3;
     }
 
     LearnStats learnTotal;
@@ -675,6 +772,7 @@ int main (int argc, char** argv)
         cpuTotal.seconds += cpu.seconds;
         cpuTotal.audio += cpu.audio;
         cpuTotal.worstBlockMs = std::max (cpuTotal.worstBlockMs, cpu.worstBlockMs);
+        cpuTotal.blockMs.insert (cpuTotal.blockMs.end(), cpu.blockMs.begin(), cpu.blockMs.end());
     }
 
     if (opt.pairs.size() > 1 || ! opt.perFile)
