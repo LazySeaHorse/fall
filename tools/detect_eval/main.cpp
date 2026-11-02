@@ -157,14 +157,15 @@ struct LearnStats
     }
 };
 
+constexpr int kNumShifts = 6;
 struct WrongStats
 {
     // [0] = nothing but the played chord is sounding, [1] = other notes are still ringing
-    int total[2][4] {}, accepted[2][4] {};
+    int total[2][kNumShifts] {}, accepted[2][kNumShifts] {};
     void add (const WrongStats& o)
     {
         for (int c = 0; c < 2; ++c)
-            for (int i = 0; i < 4; ++i) { total[c][i] += o.total[c][i]; accepted[c][i] += o.accepted[c][i]; }
+            for (int i = 0; i < kNumShifts; ++i) { total[c][i] += o.total[c][i]; accepted[c][i] += o.accepted[c][i]; }
     }
 };
 
@@ -389,11 +390,15 @@ void runLearn (const std::vector<float>& audio, double rate, const Truth& tr, co
 // Wrong-note test: while the real chord g sounds, the detector is told to expect a different chord.
 void runWrong (const std::vector<float>& audio, double rate, const Truth& tr, const Options& opt, WrongStats& st, CpuStats& cpu)
 {
-    const int shifts[4] = { 1, -1, 2, 7 };
+    // -12 / -24: the key that sounds is an octave (two) ABOVE the expected one
+    const int shifts[kNumShifts] = { 1, -1, 2, 7, -12, -24 };
     const auto& S = tr.song;
     const auto& G = tr.groups;
-    for (int si = 0; si < 4; ++si)
+    static const int onlyShift = std::getenv ("FALL_SHIFT") ? std::atoi (std::getenv ("FALL_SHIFT")) : 0;
+    for (int si = 0; si < kNumShifts; ++si)
     {
+        if (onlyShift != 0 && shifts[si] != onlyShift)
+            continue;
         NoteDetector det;
         setup (det, rate, opt);
         Runner runner (audio, rate, opt);
@@ -546,12 +551,12 @@ void printLearn (const char* title, const LearnStats& l, const WatchStats& w, co
 
 void printWrong (const WrongStats& w)
 {
-    const char* names[4] = { "+1 semitone", "-1 semitone", "+2 semitones", "+7 (fifth)" };
+    const char* names[kNumShifts] = { "+1 semitone", "-1 semitone", "+2 semitones", "+7 (fifth)", "played 8va", "played 15ma" };
     const char* ctx[2] = { "clean context", "dense context" };
     for (int c = 0; c < 2; ++c)
     {
         std::printf ("  wrong-note false accepts, %s:", ctx[c]);
-        for (int i = 0; i < 4; ++i)
+        for (int i = 0; i < kNumShifts; ++i)
             std::printf ("  %s %d/%d = %.1f%%", names[i], w.accepted[c][i], w.total[c][i], 100.0 * w.accepted[c][i] / std::max (1, w.total[c][i]));
         std::printf ("\n");
     }
@@ -723,11 +728,62 @@ void runTransients (const std::vector<float>& audio, double rate, const juce::Fi
     std::printf ("    %-8s %6d %9.1f%% %9.1f%% %7.1f%%\n", "ALL", tot[0], 100.0 * tot[1] / std::max (1, tot[0]), 100.0 * tot[2] / std::max (1, tot[0]), 100.0 * tot[3] / std::max (1, tot[0]));
 }
 
+
+// Replays a "Save what Fall heard" recording: the expected notes change at the times Fall logged
+// them, and every onset the detector reports is printed next to what the app reported.
+void runReplay (const std::vector<float>& audio, double rate, const juce::File& logCsv, const Options& opt)
+{
+    struct Line { double t; bool expected; PitchSet a, b; };
+    std::vector<Line> log;
+    juce::StringArray lines;
+    logCsv.readLines (lines);
+    for (auto& l : lines)
+    {
+        if (l.startsWith ("#") || l.startsWith ("time") || l.trim().isEmpty())
+            continue;
+        auto tok = juce::StringArray::fromTokens (l, ",", "");
+        while (tok.size() < 4) tok.add ({});
+        Line e { tok[0].getDoubleValue(), tok[1] == "expected", {}, {} };
+        for (auto& p : juce::StringArray::fromTokens (tok[2], " ", "")) if (p.isNotEmpty()) e.a.set ((size_t) p.getIntValue());
+        for (auto& p : juce::StringArray::fromTokens (tok[3], " ", "")) if (p.isNotEmpty()) e.b.set ((size_t) p.getIntValue());
+        log.push_back (e);
+    }
+    auto str = [] (const PitchSet& s)
+    {
+        juce::String r;
+        for (int p = 0; p < 128; ++p) if (s.test ((size_t) p)) r << (r.isEmpty() ? "" : " ") << p;
+        return r.isEmpty() ? juce::String ("-") : r;
+    };
+    NoteDetector det;
+    setup (det, rate, opt);
+    det.setWatchKeys ({});
+    Runner runner (audio, rate, opt);
+    size_t next = 0;
+    PitchSet cur;
+    CpuStats cpu;
+    runner.run (det, [&] (const std::vector<Event>& es, double blockEnd)
+    {
+        while (next < log.size() && blockEnd >= log[next].t)
+        {
+            const auto& l = log[next++];
+            if (l.expected) { cur = l.a; det.setExpected (cur); std::printf ("%8.3f  ---- expected %s\n", l.t, str (cur).toRawUTF8()); }
+            else std::printf ("%8.3f  app  heard %s accepted %s\n", l.t, str (l.a).toRawUTF8(), str (l.b).toRawUTF8());
+        }
+        for (auto& e : es)
+            std::printf ("%8.3f  now  +%3.0fms str %.2f  shown %s  accepted %s\n", e.t, (e.reported - e.t) * 1000.0, e.strength,
+                         str (e.pitches).toRawUTF8(), str (e.exp).toRawUTF8());
+    }, cpu);
+    bool conf = false;
+    const float c = det.getTuningCents (&conf);
+    std::printf ("tuning %.1f cents%s\n", c, conf ? "" : " (not confident)");
+}
+
 void usage()
 {
     std::puts ("usage: fall_detect_eval <audio.wav> <truth.mid|csv> [<audio2> <truth2> ...] [options]\n"
                "       fall_detect_eval --dir <wavdir> --truth <truthdir> [options]   (pairs by file name; .mid or .csv)\n"
                "options: --make-calibration <out.cal> (uses the first pair: a recording of every key played once)\n         --offset <s>  --block <n|0=random>  --sens <0..1>  --timeout <s>  --csv <file>  --calibration <file>\n"
+               "         --replay <recording.wav> <recording.csv> (a \"Save what Fall heard\" pair: what the detector reports now)\n"
                "         --transients <noises.wav> <events.csv> (false accepts on snaps/claps/knocks; see tools/detect/gen_noises.py)\n"
                "         --only learn|wrong|display (default all)  --quiet (totals only)  --names a,b,c (with --dir)");
 }
@@ -739,7 +795,7 @@ int main (int argc, char** argv)
     std::vector<juce::String> positional;
     juce::File dir, truthDir;
     juce::StringArray names;
-    std::vector<std::pair<juce::File, juce::File>> transients;
+    std::vector<std::pair<juce::File, juce::File>> transients, replays;
     for (int i = 1; i < argc; ++i)
     {
         const juce::String a (argv[i]);
@@ -775,6 +831,12 @@ int main (int argc, char** argv)
             const auto c = next();
             transients.push_back ({ juce::File::getCurrentWorkingDirectory().getChildFile (w), juce::File::getCurrentWorkingDirectory().getChildFile (c) });
         }
+        else if (a == "--replay")
+        {
+            const auto w = next();
+            const auto c = next();
+            replays.push_back ({ juce::File::getCurrentWorkingDirectory().getChildFile (w), juce::File::getCurrentWorkingDirectory().getChildFile (c) });
+        }
         else if (a == "--help" || a == "-h") { usage(); return 0; }
         else positional.push_back (a);
     }
@@ -805,7 +867,18 @@ int main (int argc, char** argv)
         std::printf ("%s\n", w.getFullPathName().toRawUTF8());
         runTransients (audio, rate, c, opt);
     }
-    if (opt.pairs.empty() && ! transients.empty())
+    for (auto& [w, c] : replays)
+    {
+        std::vector<float> audio;
+        double rate = 48000;
+        if (! loadAudio (w, audio, rate))
+        {
+            std::fprintf (stderr, "cannot read %s\n", w.getFullPathName().toRawUTF8());
+            return 2;
+        }
+        runReplay (audio, rate, c, opt);
+    }
+    if (opt.pairs.empty() && ! (transients.empty() && replays.empty()))
         return 0;
     if (opt.pairs.empty())
     {
