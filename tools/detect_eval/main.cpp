@@ -16,6 +16,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
@@ -132,6 +133,7 @@ const char* registerName (int r) { return r == 0 ? "bass  A0-B2" : (r == 1 ? "mi
 
 struct LearnStats
 {
+    std::vector<float> tuning; // estimated piano tuning per file (999 = not confident)
     int noteTotal = 0, noteHit = 0, groupTotal = 0, groupHit = 0, premature = 0;
     std::vector<double> latency[3];
     std::vector<double> latencyAll;
@@ -143,6 +145,7 @@ struct LearnStats
     {
         noteTotal += o.noteTotal; noteHit += o.noteHit; groupTotal += o.groupTotal; groupHit += o.groupHit;
         premature += o.premature; audioSeconds += o.audioSeconds;
+        tuning.insert (tuning.end(), o.tuning.begin(), o.tuning.end());
         for (int r = 0; r < 3; ++r)
         {
             latency[r].insert (latency[r].end(), o.latency[r].begin(), o.latency[r].end());
@@ -374,6 +377,9 @@ void runLearn (const std::vector<float>& audio, double rate, const Truth& tr, co
     }, cpu);
     while (g < G.size())
         finishGroup (false, 0);
+    bool tuneOk = false;
+    const float tuneC = det.getTuningCents (&tuneOk);
+    ls.tuning.push_back (tuneOk ? tuneC : 999.0f);
 
     for (auto& n : S.notes)
         if (n.pitch == 21 || n.pitch == 23 || n.pitch == 108)
@@ -522,6 +528,10 @@ void printLearn (const char* title, const LearnStats& l, const WatchStats& w, co
     std::printf ("  learn: notes %d/%d heard = recall %.1f%%   chords %d/%d complete = %.1f%%   premature accepts %d (%.2f/min)\n",
                  l.noteHit, l.noteTotal, 100.0 * l.noteHit / std::max (1, l.noteTotal), l.groupHit, l.groupTotal,
                  100.0 * l.groupHit / std::max (1, l.groupTotal), l.premature, l.premature * 60.0 / std::max (1.0, l.audioSeconds));
+    std::printf ("  tuning estimate (cents, per file; x = not confident):");
+    for (float t : l.tuning)
+        t > 900.0f ? std::printf (" x") : std::printf (" %+.0f", (double) t);
+    std::printf ("\n");
     std::printf ("  latency (ms, until process() returned it)   n     p50    p90    p99    miss%%\n");
     for (int r = 0; r < 3; ++r)
         std::printf ("    %-14s                        %5zu %6.0f %6.0f %6.0f %6.1f\n", registerName (r), l.latency[r].size(),
@@ -637,11 +647,88 @@ bool makeCalibration (const std::vector<float>& audio, double rate, const Truth&
     return out.replaceWithData (mb.getData(), mb.getSize());
 }
 
+// False-accept test on non-piano sounds (snaps, claps, knocks ...): before every event the
+// detector is told to expect a random chord; any expected hit near the event is a false accept.
+void runTransients (const std::vector<float>& audio, double rate, const juce::File& eventsCsv, const Options& opt)
+{
+    struct Ev { double t; juce::String kind; };
+    std::vector<Ev> evs;
+    juce::StringArray lines;
+    eventsCsv.readLines (lines);
+    for (int i = 1; i < lines.size(); ++i)
+    {
+        auto tok = juce::StringArray::fromTokens (lines[i], ",", "");
+        if (tok.size() >= 2)
+            evs.push_back ({ tok[0].getDoubleValue(), tok[1].trim() });
+    }
+    std::map<juce::String, std::array<int, 4>> perKind; // events, expected accepted, display shown, jump fired
+    const int passes = 4;
+    for (int pass = 0; pass < passes; ++pass)
+    {
+        NoteDetector det;
+        setup (det, rate, opt);
+        Runner runner (audio, rate, opt);
+        uint32_t rng = 777u + (uint32_t) pass * 1000003u;
+        auto rnd = [&] (int n) { rng = rng * 1664525u + 1013904223u; return (int) ((rng >> 8) % (uint32_t) n); };
+        std::vector<PitchSet> chords (evs.size());
+        for (auto& c : chords)
+        {
+            const int root = 36 + rnd (61);
+            c.set ((size_t) root);
+            const int kind = rnd (3); // single note, dyad, triad
+            if (kind >= 1) c.set ((size_t) std::min (108, root + 3 + rnd (2)));
+            if (kind >= 2) c.set ((size_t) std::min (108, root + 7));
+        }
+        std::vector<std::array<bool, 3>> hit (evs.size(), { false, false, false });
+        size_t next = 0;      // next event whose chord must be set
+        CpuStats cpu;
+        runner.run (det, [&] (const std::vector<Event>& es, double blockEnd)
+        {
+            while (next < evs.size() && blockEnd >= evs[next].t - 0.6)
+                det.setExpected (chords[next++]);
+            for (auto& e : es)
+                for (size_t k = 0; k < evs.size(); ++k)
+                    if (e.t > evs[k].t - 0.05 && e.t < evs[k].t + 0.6)
+                    {
+                        if (opt.verbose && pass == 0 && (e.exp & chords[k]).any())
+                        {
+                            std::printf ("    [accept] %s at %.2f (onset %.3f, +%.0f ms): expected", evs[k].kind.toRawUTF8(), evs[k].t, e.t, (e.reported - e.t) * 1000.0);
+                            for (int p = 21; p <= 108; ++p) if (chords[k].test ((size_t) p)) std::printf (" %d", p);
+                            std::printf (" hit");
+                            for (int p = 21; p <= 108; ++p) if (e.exp.test ((size_t) p)) std::printf (" %d", p);
+                            std::printf ("\n");
+                        }
+                        hit[k][0] = hit[k][0] || (e.exp & chords[k]).any();
+                        hit[k][1] = hit[k][1] || e.pitches.any();
+                        hit[k][2] = hit[k][2] || e.watch.any();
+                    }
+        }, cpu);
+        for (size_t k = 0; k < evs.size(); ++k)
+        {
+            auto& a = perKind[evs[k].kind];
+            ++a[0];
+            a[1] += hit[k][0];
+            a[2] += hit[k][1];
+            a[3] += hit[k][2];
+        }
+    }
+    std::printf ("  false accepts on non-piano sounds (%d passes, random expected chord per event)\n", passes);
+    std::printf ("    %-8s %6s %10s %10s %8s\n", "kind", "events", "accepted", "display", "jumpkey");
+    std::array<int, 4> tot {};
+    for (auto& [k, a] : perKind)
+    {
+        std::printf ("    %-8s %6d %9.1f%% %9.1f%% %7.1f%%\n", k.toRawUTF8(), a[0], 100.0 * a[1] / a[0], 100.0 * a[2] / a[0], 100.0 * a[3] / a[0]);
+        for (int i = 0; i < 4; ++i) tot[(size_t) i] += a[(size_t) i];
+    }
+    std::printf ("    %-8s %6d %9.1f%% %9.1f%% %7.1f%%\n", "ALL", tot[0], 100.0 * tot[1] / std::max (1, tot[0]), 100.0 * tot[2] / std::max (1, tot[0]), 100.0 * tot[3] / std::max (1, tot[0]));
+}
+
 void usage()
 {
     std::puts ("usage: fall_detect_eval <audio.wav> <truth.mid|csv> [<audio2> <truth2> ...] [options]\n"
                "       fall_detect_eval --dir <wavdir> --truth <truthdir> [options]   (pairs by file name; .mid or .csv)\n"
                "options: --make-calibration <out.cal> (uses the first pair: a recording of every key played once)\n         --offset <s>  --block <n|0=random>  --sens <0..1>  --timeout <s>  --csv <file>  --calibration <file>\n"
+               "         --transients <noises.wav> <events.csv> (false accepts on snaps/claps/knocks; see tools/detect/gen_noises.py)\n"
                "         --only learn|wrong|display (default all)  --quiet (totals only)  --names a,b,c (with --dir)");
 }
 } // namespace
@@ -652,6 +739,7 @@ int main (int argc, char** argv)
     std::vector<juce::String> positional;
     juce::File dir, truthDir;
     juce::StringArray names;
+    std::vector<std::pair<juce::File, juce::File>> transients;
     for (int i = 1; i < argc; ++i)
     {
         const juce::String a (argv[i]);
@@ -681,6 +769,12 @@ int main (int argc, char** argv)
             opt.wrong = m == "wrong";
             opt.display = m == "display";
         }
+        else if (a == "--transients")
+        {
+            const auto w = next();
+            const auto c = next();
+            transients.push_back ({ juce::File::getCurrentWorkingDirectory().getChildFile (w), juce::File::getCurrentWorkingDirectory().getChildFile (c) });
+        }
         else if (a == "--help" || a == "-h") { usage(); return 0; }
         else positional.push_back (a);
     }
@@ -699,6 +793,20 @@ int main (int argc, char** argv)
     for (size_t i = 0; i + 1 < positional.size(); i += 2)
         opt.pairs.push_back ({ juce::File::getCurrentWorkingDirectory().getChildFile (positional[i]),
                                juce::File::getCurrentWorkingDirectory().getChildFile (positional[i + 1]) });
+    for (auto& [w, c] : transients)
+    {
+        std::vector<float> audio;
+        double rate = 48000;
+        if (! loadAudio (w, audio, rate))
+        {
+            std::fprintf (stderr, "cannot read %s\n", w.getFullPathName().toRawUTF8());
+            return 2;
+        }
+        std::printf ("%s\n", w.getFullPathName().toRawUTF8());
+        runTransients (audio, rate, c, opt);
+    }
+    if (opt.pairs.empty() && ! transients.empty())
+        return 0;
     if (opt.pairs.empty())
     {
         usage();
