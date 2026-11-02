@@ -108,7 +108,12 @@ void AudioEngine::processBlock (const float* const* inputs, int numIn, float* co
                 e.latencyMs = (float) (1000.0 * (double) (o.reportedAt - o.samplePosition) / sampleRate);
                 pushHeard (e);
             }
-            detector.setExpected (player.expectedPitches());
+            if (player.getGroupsCompleted() != expectedGroups || player.nextGroupTime() != expectedGate)
+            {
+                expectedGroups = player.getGroupsCompleted();
+                expectedGate = player.nextGroupTime();
+                detector.setExpected (player.expectedPitches());
+            }
             detector.setWatchKeys (player.jumpKeys());
             inputDb.store (detector.getInputLevelDb());
         }

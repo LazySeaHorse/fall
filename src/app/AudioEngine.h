@@ -126,6 +126,10 @@ private:
     double sampleRate = 48000.0;
     int    blockSize = 512;
     int64_t streamPos = 0;
+    // The detector treats every setExpected() call after a hit as a new chord, so only call it when
+    // the chord the player waits for actually changes.
+    int    expectedGroups = -1;
+    double expectedGate = -1e9;
     std::atomic<bool>  deviceRunning { false };
     std::atomic<bool>  micEnabled { true };
     std::atomic<int>   numInputs { 0 };
