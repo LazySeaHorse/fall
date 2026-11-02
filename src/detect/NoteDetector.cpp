@@ -81,6 +81,26 @@ struct NoteDetector::Impl
         float settleStrength = 2.2f;  // onset strength (x threshold) needed within kSettleMs of the previous onset
         float watchContrast = 0.35f; // jump key must beat its neighbours' score by this much
         float neighbourMargin = 0.15f; // a non-expected adjacent key must beat an expected one by this much to veto it
+        // Tonality: a real partial is ONE stable sinusoid, so the reassigned frequency of the peak bin and
+        // of its neighbours agree. Noise (snaps, claps, hammer thump, reverb tails) has peaks too, but
+        // their neighbours point elsewhere. Disagreement (bins) up to tonalTol is fine, tonalTol + tonalSoft is noise.
+        float tonalTol = 10.0f, tonalSoft = 0.25f; // (off by default: too weak at onsets, see docs)
+        // Explanation: of the new tonal peaks in an expected key's frequency range, at least this fraction
+        // (evidence-weighted) must sit on partials of the expected chord. Voices, claps and wrong notes
+        // leave most of their peaks unexplained.
+        float explainMin = 0.0f;
+        float explainFloor = 1.5f;     // below this much total new evidence in the range the check is skipped
+        // Precision ("tuner") check for expected keys: fit one tuning offset + one inharmonicity scale to
+        // the matched partials, then count only partials within fitTolCents (or fitTolBins of an FFT bin,
+        // whichever is wider) of the fit. A real string's partials line up; random peaks don't.
+        float fitTolCents = 6.0f, fitTolBins = 0.3f;
+        float useFit = 1.0f;           // 0 = old window-only score (for comparisons)
+        float useReassign = 0.0f;      // 1 = reassigned frequency as the peak position (else parabola)
+        float energyMin = 0.5f;        // energyRatio() an expected key needs
+        float energyLobe = 1.5f;       // bins around each fitted partial that count as "on the partial"
+        float expectedFitMin = 0.20f;  // like expectedMin, for the (stricter, so lower) fitted score
+        float fitMinPitch = 55.0f;
+        float autoTune = 1.0f;         // 0 = keep the models at A440     // keys below this use the plain window score (bass partials are messy)
     } tune;
 
     // Fixed design constants (milliseconds converted in prepare()).
@@ -111,8 +131,8 @@ struct NoteDetector::Impl
 
     std::unique_ptr<juce::dsp::FFT> fft1;
     std::unique_ptr<juce::dsp::FFT> fftS[kNumStages];
-    std::vector<float> win1, winS[kNumStages];
-    std::vector<float> fftBuf;
+    std::vector<float> win1, winS[kNumStages], winD[kNumStages]; // winD: time derivative of winS (reassignment)
+    std::vector<float> fftBuf, fftBufD;
 
     // audio history
     std::vector<float> ring;
@@ -165,7 +185,19 @@ struct NoteDetector::Impl
     int outMax = 0, outCount = 0;
 
     // evaluation scratch
-    std::vector<float> magP, magR, evid, evidExp, lnCum, evidWork, ampBuf, medScratch, peakPos;
+    std::vector<float> magP, magR, evid, evidExp, lnCum, evidWork, ampBuf, medScratch, peakPos, kHat;
+    std::vector<uint8_t> explainMask;
+
+    // Auto-tuner: like a tuner app, but over every clear tonal peak of every note: a histogram of the
+    // peaks' offsets from the equal-tempered A440 grid (cents, folded into -50..50). Low partials of
+    // any note sit on that grid (h = 1, 2, 4, 8 exactly, 3 and 6 at +2 cents), so the histogram's mode
+    // is the piano's tuning offset. Uncalibrated key models are shifted by it.
+    static constexpr int kTuneBins = 100;
+    float tuneHist[kTuneBins] {};
+    float tuneMass = 0.0f;
+    float modelTune = 0.0f;                 // offset the models are currently built with
+    std::atomic<float> tuneEstimate { 0.0f };
+    std::atomic<bool>  tuneConfident { false };
 
     // calibration capture
     bool    captureArmed = false;
@@ -208,11 +240,19 @@ struct NoteDetector::Impl
             fftS[s] = std::make_unique<juce::dsp::FFT> (log2Int (stageN[s]));
             stageLen[s] = s == 3 ? std::min (stageN[s], (int) std::llround (fs * kLateMs / 1000.0)) : stageN[s];
             winS[s].resize ((size_t) stageLen[s]);
+            winD[s].resize ((size_t) stageLen[s]);
+            const float L = (float) stageLen[s], twoPi = 2.0f * juce::MathConstants<float>::pi;
             for (int i = 0; i < stageLen[s]; ++i)
-                winS[s][(size_t) i] = 0.5f - 0.5f * std::cos (2.0f * juce::MathConstants<float>::pi * (float) i / (float) stageLen[s]);
+            {
+                winS[s][(size_t) i] = 0.5f - 0.5f * std::cos (twoPi * (float) i / L);
+                winD[s][(size_t) i] = 0.5f * twoPi / L * std::sin (twoPi * (float) i / L);
+            }
             maxN = std::max (maxN, stageN[s]);
         }
         fftBuf.assign ((size_t) maxN * 2, 0.0f);
+        fftBufD.assign ((size_t) maxN * 2, 0.0f);
+        kHat.assign ((size_t) maxN / 2 + 16, 0.0f);
+        explainMask.assign ((size_t) maxN / 2 + 16, 0);
         magP.assign ((size_t) maxN / 2 + 8, 0.0f);
         magR.assign ((size_t) maxN / 2 + 8, 0.0f);
         evid.assign ((size_t) maxN / 2 + 8, 0.0f);
@@ -240,6 +280,9 @@ struct NoteDetector::Impl
         maskBins.clear();
 
         levelAlpha = 1.0f - std::exp (-1.0f / (float) (fs * 0.3));
+        std::fill (std::begin (tuneHist), std::end (tuneHist), 0.0f);
+        tuneMass = 0.0f;
+        fitCount = 0;
         prepared = true;
         rebuildModels();
         reset();
@@ -278,6 +321,8 @@ struct NoteDetector::Impl
         tune.newLo       = 8.0f - 3.3f * s;
         tune.newHi       = tune.newLo + 12.0f;
         tune.expectedMin = 0.50f - 0.25f * s;
+        tune.expectedFitMin = 0.32f - 0.20f * s;
+        tune.energyMin   = 0.68f - 0.12f * s; // hardly loosened: it is what keeps snaps and claps out
         tune.watchMin    = 0.74f - 0.20f * s;
         tune.displayMin  = 0.52f - 0.20f * s;
         for (int i = 0; i < kNumOverrides; ++i)
@@ -286,17 +331,17 @@ struct NoteDetector::Impl
     }
 
     // Name -> tuning field table (also used by the eval tool for sweeps).
-    static constexpr int kNumOverrides = 25;
+    static constexpr int kNumOverrides = 38;
     static const char* overrideName (int i)
     {
         static const char* names[kNumOverrides] = { "zOnset", "zComb", "promLo", "promHi", "newLo", "newHi", "expectedMin",
-                                                    "watchMin", "displayMin", "neighbourMargin", "watchContrast", "settleStrength", "expectedNewRelief", "weakOnsetPenalty", "contrastMin", "watchStrictDb", "chanceCoef", "watchSel", "subharmonicMin", "displaySel", "stage1Bump", "stage2Bump", "watchIndependent", "watchPrefilter", "measuredScale" };
+                                                    "watchMin", "displayMin", "neighbourMargin", "watchContrast", "settleStrength", "expectedNewRelief", "weakOnsetPenalty", "contrastMin", "watchStrictDb", "chanceCoef", "watchSel", "subharmonicMin", "displaySel", "stage1Bump", "stage2Bump", "watchIndependent", "watchPrefilter", "measuredScale", "tonalTol", "tonalSoft", "explainMin", "explainFloor", "fitTolCents", "fitTolBins", "useFit", "useReassign", "energyMin", "energyLobe", "fitMinPitch", "expectedFitMin", "autoTune" };
         return names[i];
     }
     float* overridePtr (int i)
     {
         float* p[kNumOverrides] = { &tune.zOnset, &tune.zComb, &tune.promLo, &tune.promHi, &tune.newLo, &tune.newHi, &tune.expectedMin,
-                                    &tune.watchMin, &tune.displayMin, &tune.neighbourMargin, &tune.watchContrast, &tune.settleStrength, &tune.expectedNewRelief, &tune.weakOnsetPenalty, &tune.contrastMin, &tune.watchStrictDb, &tune.chanceCoef, &tune.watchSel, &tune.subharmonicMin, &tune.displaySel, &tune.stage1Bump, &tune.stage2Bump, &tune.watchIndependent, &tune.watchPrefilter, &tune.measuredScale };
+                                    &tune.watchMin, &tune.displayMin, &tune.neighbourMargin, &tune.watchContrast, &tune.settleStrength, &tune.expectedNewRelief, &tune.weakOnsetPenalty, &tune.contrastMin, &tune.watchStrictDb, &tune.chanceCoef, &tune.watchSel, &tune.subharmonicMin, &tune.displaySel, &tune.stage1Bump, &tune.stage2Bump, &tune.watchIndependent, &tune.watchPrefilter, &tune.measuredScale, &tune.tonalTol, &tune.tonalSoft, &tune.explainMin, &tune.explainFloor, &tune.fitTolCents, &tune.fitTolBins, &tune.useFit, &tune.useReassign, &tune.energyMin, &tune.energyLobe, &tune.fitMinPitch, &tune.expectedFitMin, &tune.autoTune };
         return p[i];
     }
     bool  overrideSet[kNumOverrides] {};
@@ -306,7 +351,7 @@ struct NoteDetector::Impl
     {
         if (! prepared)
             return;
-        buildKeyModels (fs, haveCal ? &cal : nullptr, models);
+        buildKeyModels (fs, haveCal ? &cal : nullptr, models, haveCal ? 0.0 : (double) modelTune);
         rebuildMask();
     }
 
@@ -548,13 +593,43 @@ struct NoteDetector::Impl
         }
     }
 
+    // Spectrum of the window ending at endPos plus, per bin, the reassigned frequency (in bins):
+    // k^ = k - Im (X_h' / X_h) * n / 2pi, with h' the window's time derivative. For a sinusoid every
+    // bin of its main lobe reports the sinusoid's exact frequency.
+    void computeReassigned (int64_t endPos, int stage)
+    {
+        const int n = stageN[stage], len = stageLen[stage];
+        const int64_t start = endPos - len;
+        const float* w = winS[stage].data();
+        const float* wd = winD[stage].data();
+        for (int i = 0; i < len; ++i)
+        {
+            const float x = ringAt (start + i);
+            fftBuf[(size_t) i] = x * w[i];
+            fftBufD[(size_t) i] = x * wd[i];
+        }
+        std::fill (fftBuf.begin() + len, fftBuf.begin() + 2 * (size_t) n, 0.0f);
+        std::fill (fftBufD.begin() + len, fftBufD.begin() + 2 * (size_t) n, 0.0f);
+        fftS[stage]->performRealOnlyForwardTransform (fftBuf.data(), true);
+        fftS[stage]->performRealOnlyForwardTransform (fftBufD.data(), true);
+        const float scale = (float) n / (2.0f * juce::MathConstants<float>::pi);
+        for (int k = 0; k <= n / 2; ++k)
+        {
+            const float re = fftBuf[(size_t) 2 * (size_t) k], im = fftBuf[(size_t) 2 * (size_t) k + 1];
+            const float rd = fftBufD[(size_t) 2 * (size_t) k], id = fftBufD[(size_t) 2 * (size_t) k + 1];
+            const float p = re * re + im * im;
+            magP[(size_t) k] = std::sqrt (p);
+            kHat[(size_t) k] = p > 1e-24f ? (float) k - scale * (id * re - rd * im) / p : (float) k;
+        }
+    }
+
     struct EvBand { int kLo, kHi; double binHz; };
 
     // Fills `evid` with per-bin evidence of NEW energy (0..1) and returns the bin range.
     EvBand computeEvidence (int stage, int64_t postEnd, int64_t preEnd, float strictBoostDb = 0.0f)
     {
         const int n = stageN[stage];
-        computeSpectrum (postEnd, stage, magP);
+        computeReassigned (postEnd, stage);
         computeSpectrum (preEnd, stage, magR);
         EvBand b;
         b.binHz = fs / (double) n;
@@ -611,18 +686,35 @@ struct NoteDetector::Impl
                 continue;
             }
             const float lnP = std::log (pk + 1e-9f);
-            // sub-bin peak position (parabola through the log magnitudes): lets the key windows be
-            // narrower than the FFT resolution, which is what separates adjacent semitones
-            const float l = std::log (magP[(size_t) k - 1] + 1e-9f), r = std::log (magP[(size_t) k + 1] + 1e-9f);
-            const float den = l - 2.0f * lnP + r;
-            peakPos[(size_t) k] = (float) k + (den < -1e-6f ? juce::jlimit (-0.5f, 0.5f, 0.5f * (l - r) / den) : 0.0f);
+            // Tonality: the peak's own reassigned frequency must sit near the peak, and its two
+            // neighbours (both inside a sinusoid's main lobe) must point to the same frequency.
+            const float kh = kHat[(size_t) k];
+            const float dev = std::max ({ std::abs (kHat[(size_t) k - 1] - kh), std::abs (kHat[(size_t) k + 1] - kh),
+                                          std::max (0.0f, std::abs (kh - (float) k) - 0.5f) });
+            const float tonal = clamp01 (1.0f - (dev - tune.tonalTol) / tune.tonalSoft);
+            if (tonal <= 0.0f)
+            {
+                evid[(size_t) k] = 0.0f;
+                evidExp[(size_t) k] = 0.0f;
+                continue;
+            }
+            // sub-bin peak position (the reassigned frequency): lets the key windows be narrower than
+            // the FFT resolution, which is what separates adjacent semitones
+            if (tune.useReassign > 0.5f)
+                peakPos[(size_t) k] = juce::jlimit ((float) k - 0.5f, (float) k + 0.5f, kh);
+            else
+            {
+                const float l = std::log (magP[(size_t) k - 1] + 1e-9f), r = std::log (magP[(size_t) k + 1] + 1e-9f);
+                const float den = l - 2.0f * lnP + r;
+                peakPos[(size_t) k] = (float) k + (den < -1e-6f ? juce::jlimit (-0.5f, 0.5f, 0.5f * (l - r) / den) : 0.0f);
+            }
             const float prom = 8.6859f * (lnP - lnCum[(size_t) k]);
             const float fresh = 8.6859f * (lnP - std::log (1.14f * magR[(size_t) k] + 1e-9f)) - gainRiseDb;
             const float pe = clamp01 ((prom - promLo) * promInv);
-            evid[(size_t) k] = std::min (pe, clamp01 ((fresh - newLo) * newInv));
+            evid[(size_t) k] = tonal * std::min (pe, clamp01 ((fresh - newLo) * newInv));
             // expected-key checks may be more forgiving about newness (a repeated note adds only a
             // few dB on top of its own ringing partial)
-            evidExp[(size_t) k] = std::min (pe, clamp01 ((fresh - newLoExp) * newInv));
+            evidExp[(size_t) k] = tonal * std::min (pe, clamp01 ((fresh - newLoExp) * newInv));
         }
         return b;
     }
@@ -642,6 +734,146 @@ struct NoteDetector::Impl
             f += kp.w[i] * m;
         }
         return f;
+    }
+
+    // Like score(), but only partials that agree with ONE string, the way a tuner locks on: a small grid
+    // search over the tuning offset c (cents) and the inharmonicity scale (B x (1 + beta)) predicts every
+    // partial; each partial earns credit only for a peak within the tolerance of its prediction (full
+    // credit within tol, none beyond 2 x tol). Random peaks that merely fall into the wide model windows
+    // (a voice, a clap, another note's partials) don't line up with any single (c, beta).
+    static constexpr int kMaxCand = 4;
+    static constexpr int kNumBeta = 12;
+    static constexpr float kBetas[kNumBeta] = { -1.0f, -0.8f, -0.6f, -0.4f, -0.2f, 0.0f, 0.3f, 0.6f, 1.0f, 1.6f, 2.5f, 4.0f };
+
+    struct Fit { float c = 0.0f; float beta = 0.0f; };
+    bool useFitFor (int pitch) const noexcept { return tune.useFit > 0.5f && (float) pitch >= tune.fitMinPitch; }
+
+    float scoreFit (int pitch, const float* e, const EvBand& b, Fit* fitOut = nullptr) const noexcept
+    {
+        const auto& kp = models[(size_t) keyIndex (pitch)];
+        float cd[kMaxPartials][kMaxCand], ce[kMaxPartials][kMaxCand], tol[kMaxPartials], w[kMaxPartials];
+        float shift[kMaxPartials][kNumBeta];
+        int nc[kMaxPartials];
+        const double B = inharmonicityB (pitch);
+        int n = 0;
+        for (int i = 0; i < kp.n; ++i)
+        {
+            const float lo = (float) ((double) kp.lo[i] / b.binHz) - 0.12f, hi = (float) ((double) kp.hi[i] / b.binHz) + 0.12f;
+            const int k0 = std::max ((int) std::floor (lo) - 1, b.kLo);
+            const int k1 = std::min ((int) std::ceil (hi) + 1, b.kHi);
+            int m = 0;
+            for (int k = k0; k <= k1; ++k)
+            {
+                if (e[k] <= 0.0f || peakPos[(size_t) k] < lo || peakPos[(size_t) k] > hi)
+                    continue;
+                // keep the kMaxCand strongest-evidence peaks (ties: louder first)
+                int slot = m < kMaxCand ? m++ : -1;
+                if (slot < 0)
+                {
+                    int weakest = 0;
+                    for (int j = 1; j < kMaxCand; ++j)
+                        if (ce[n][j] < ce[n][weakest]) weakest = j;
+                    if (ce[n][weakest] >= e[k])
+                        continue;
+                    slot = weakest;
+                }
+                ce[n][slot] = e[k];
+                cd[n][slot] = (float) (1200.0 * std::log2 ((double) peakPos[(size_t) k] * b.binHz / (double) kp.hz[i]));
+            }
+            if (m == 0)
+                continue;
+            nc[n] = m;
+            w[n] = kp.w[i];
+            tol[n] = std::max (tune.fitTolCents, (float) (1200.0 * std::log2 (1.0 + tune.fitTolBins * b.binHz / (double) kp.hz[i])));
+            const double h2 = (double) kp.h[i] * kp.h[i];
+            for (int bi = 0; bi < kNumBeta; ++bi)
+                shift[n][bi] = kp.measured ? 0.0f
+                                           : (float) (600.0 * std::log2 ((1.0 + B * (1.0 + kBetas[bi]) * h2) / (1.0 + B * h2)));
+            ++n;
+        }
+        if (n == 0)
+            return 0.0f;
+        if (fitOut != nullptr) *fitOut = Fit();
+
+        float best = 0.0f;
+        const int nb = kp.measured ? 1 : kNumBeta;
+        for (int bj = 0; bj < nb; ++bj)
+        {
+            const int bi = kp.measured ? 5 : bj; // beta = 0 for measured partials
+            for (float c = -30.0f; c <= 30.0f; c += 1.5f)
+            {
+                float f = 0.0f;
+                for (int i = 0; i < n; ++i)
+                {
+                    const float pred = c + shift[i][bi];
+                    float credit = 0.0f;
+                    for (int j = 0; j < nc[i]; ++j)
+                        credit = std::max (credit, ce[i][j] * clamp01 (2.0f - std::abs (cd[i][j] - pred) / tol[i]));
+                    f += w[i] * credit;
+                }
+                if (f > best)
+                {
+                    best = f;
+                    if (fitOut != nullptr) { fitOut->c = c; fitOut->beta = kBetas[bi]; }
+                }
+            }
+        }
+        return best;
+    }
+
+    // Where did the new energy go? Fraction of the new power (post - pre) in the key's frequency range
+    // that lies on the FITTED partials of `pitch` (+- the main lobe and the fit tolerance) or on the model
+    // partials of the other expected keys (a chord). A piano note puts most of its new energy into its
+    // partials; a snap or clap spreads it everywhere, a voice or a wrong key puts it elsewhere.
+    float energyRatio (int pitch, const Fit& fit, const EvBand& b) noexcept
+    {
+        const auto& kp = models[(size_t) keyIndex (pitch)];
+        if (kp.n == 0)
+            return 1.0f;
+        float hiHz = kp.hz[0];
+        for (int i = 0; i < kp.n && kp.hz[i] < 5000.0f; ++i)
+            hiHz = kp.hz[i];
+        const int k0 = std::max (b.kLo, (int) std::floor (kp.lo[0] * 0.94 / b.binHz));
+        const int k1 = std::min (b.kHi, (int) std::ceil (hiHz * 1.06 / b.binHz));
+        if (k1 <= k0)
+            return 1.0f;
+        std::fill (explainMask.begin() + k0, explainMask.begin() + k1 + 1, (uint8_t) 0);
+        const double B = inharmonicityB (pitch);
+        for (int i = 0; i < kp.n; ++i)
+        {
+            const double h2 = (double) kp.h[i] * kp.h[i];
+            const double cents = fit.c + (kp.measured ? 0.0 : 600.0 * std::log2 ((1.0 + B * (1.0 + fit.beta) * h2) / (1.0 + B * h2)));
+            const double hz = kp.hz[i] * std::pow (2.0, cents / 1200.0);
+            const double tolHz = hz * (std::pow (2.0, tune.fitTolCents / 1200.0) - 1.0);
+            const double half = tolHz / b.binHz + tune.energyLobe;
+            const int a = std::max (k0, (int) std::floor (hz / b.binHz - half)), c = std::min (k1, (int) std::ceil (hz / b.binHz + half));
+            for (int k = a; k <= c; ++k)
+                explainMask[(size_t) k] = 1;
+        }
+        for (int p = kLowestPianoKey; p <= kHighestPianoKey; ++p)
+        {
+            if (p == pitch || ! expected.test ((size_t) p))
+                continue;
+            const auto& q = models[(size_t) keyIndex (p)];
+            for (int i = 0; i < q.n; ++i)
+            {
+                const int a = std::max (k0, (int) std::floor ((double) q.lo[i] / b.binHz - tune.energyLobe));
+                const int c = std::min (k1, (int) std::ceil ((double) q.hi[i] / b.binHz + tune.energyLobe));
+                for (int k = a; k <= c; ++k)
+                    explainMask[(size_t) k] = 1;
+            }
+        }
+        double all = 0.0, inside = 0.0;
+        for (int k = k0; k <= k1; ++k)
+        {
+            const double post = (double) magP[(size_t) k] * magP[(size_t) k];
+            const double pre = 1.3 * (double) magR[(size_t) k] * magR[(size_t) k];
+            const double d = post > pre ? post - pre : 0.0;
+            all += d;
+            if (explainMask[(size_t) k] != 0)
+                inside += d;
+        }
+        return all <= 0.0 ? 1.0f : (float) (inside / all);
     }
 
     // Score over only those partials that no octave (h even) or twelfth (h multiple of 3) of a
@@ -702,6 +934,49 @@ struct NoteDetector::Impl
         return n == 0 ? 0.0f : v[n / 2];
     }
 
+    // Marks the bins of every expected key's partial windows (for explainedRatio()).
+    void buildExplainMask (const EvBand& b)
+    {
+        std::fill (explainMask.begin() + b.kLo, explainMask.begin() + b.kHi + 1, (uint8_t) 0);
+        for (int p = kLowestPianoKey; p <= kHighestPianoKey; ++p)
+        {
+            if (! expected.test ((size_t) p))
+                continue;
+            const auto& kp = models[(size_t) keyIndex (p)];
+            for (int i = 0; i < kp.n; ++i)
+            {
+                const int k0 = std::max (b.kLo, (int) std::floor ((double) kp.lo[i] / b.binHz - 0.12));
+                const int k1 = std::min (b.kHi, (int) std::ceil ((double) kp.hi[i] / b.binHz + 0.12));
+                for (int k = k0; k <= k1; ++k)
+                    explainMask[(size_t) k] = 1;
+            }
+        }
+    }
+
+    // Of the clearly new tonal peaks in the frequency range of `pitch`'s partials, the
+    // (evidence-weighted) fraction that the expected chord explains. 1 when there is too little
+    // new evidence to judge.
+    float explainedRatio (int pitch, const EvBand& b) const noexcept
+    {
+        const auto& kp = models[(size_t) keyIndex (pitch)];
+        if (kp.n == 0)
+            return 1.0f;
+        float hiHz = kp.hz[0];
+        for (int i = 0; i < kp.n && kp.hz[i] < 5000.0f; ++i)
+            hiHz = kp.hz[i];
+        const int k0 = std::max (b.kLo, (int) std::floor (kp.lo[0] * 0.94 / b.binHz));
+        const int k1 = std::min (b.kHi, (int) std::ceil (hiHz * 1.06 / b.binHz));
+        float all = 0.0f, inside = 0.0f;
+        for (int k = k0; k <= k1; ++k)
+        {
+            const float e = evid[(size_t) k];
+            all += e;
+            if (explainMask[(size_t) k] != 0)
+                inside += e;
+        }
+        return all < tune.explainFloor ? 1.0f : inside / all;
+    }
+
     // True when a semitone/tone neighbour that is NOT expected explains the evidence clearly better,
     // i.e. the user most likely hit the wrong (adjacent) key.
     bool betterNeighbour (int pitch, float f, const EvBand& b) const noexcept
@@ -711,7 +986,8 @@ struct NoteDetector::Impl
             const int q = pitch + d;
             if (! isPianoKey (q) || expected.test ((size_t) q))
                 continue;
-            if (score (models[(size_t) keyIndex (q)], evidExp.data(), b) > f + tune.neighbourMargin)
+            const float fq = useFitFor (pitch) ? scoreFit (q, evidExp.data(), b) : score (models[(size_t) keyIndex (q)], evidExp.data(), b);
+            if (fq > f + tune.neighbourMargin)
                 return true;
         }
         return false;
@@ -780,6 +1056,78 @@ struct NoteDetector::Impl
         return f - worst;
     }
 
+    void accumulateTuning (const EvBand& b)
+    {
+        for (auto& v : tuneHist)
+            v *= 0.985f;
+        tuneMass *= 0.985f;
+        const int k0 = std::max (b.kLo + 1, (int) (100.0 / b.binHz)), k1 = std::min (b.kHi - 1, (int) (2000.0 / b.binHz));
+        for (int k = k0; k <= k1; ++k)
+        {
+            const float e = evid[(size_t) k];
+            if (e < 0.7f)
+                continue;
+            const double cents = 1200.0 * std::log2 ((double) peakPos[(size_t) k] * b.binHz / 440.0);
+            double frac = cents - 100.0 * std::floor (cents / 100.0 + 0.5); // -50 .. 50
+            const int bin = juce::jlimit (0, kTuneBins - 1, (int) std::floor (frac + 50.0));
+            tuneHist[bin] += e;
+            tuneMass += e;
+        }
+        if (tuneMass < 25.0f)
+            return;
+        // circular smoothing (+-4 cents, triangular) and mode
+        float best = 0.0f, mean = tuneMass / (float) kTuneBins;
+        int bestBin = 0;
+        for (int i = 0; i < kTuneBins; ++i)
+        {
+            float v = 0.0f;
+            for (int d = -4; d <= 4; ++d)
+                v += (5.0f - (float) std::abs (d)) * tuneHist[(i + d + kTuneBins) % kTuneBins];
+            v /= 25.0f;
+            if (v > best) { best = v; bestBin = i; }
+        }
+        // Coarse lock only: higher partials are stretched (inharmonicity), which biases this estimate a
+        // few cents sharp. The fine estimate comes from the fitted offsets of accepted notes (noteFitted).
+        const bool confident = best > 3.0f * mean;
+        const float est = (float) bestBin - 50.0f + 0.5f - 5.0f;
+        if (fitsSeen < kFitRing)
+        {
+            tuneEstimate.store (est, std::memory_order_relaxed);
+            tuneConfident.store (confident, std::memory_order_relaxed);
+        }
+        if (confident && ! haveCal && tune.autoTune > 0.5f && std::abs (est - modelTune) >= 12.0f)
+        {
+            modelTune = est;
+            fitCount = 0;
+            rebuildModels();
+        }
+    }
+
+    // An accepted expected key's fitted offset from its model (cents): the fine tuning estimate.
+    static constexpr int kFitRing = 9;
+    float fitRing[kFitRing] {};
+    int   fitCount = 0, fitsSeen = 0;
+
+    void noteFitted (float c)
+    {
+        fitRing[fitCount++] = c;
+        if (fitCount < kFitRing)
+            return;
+        float tmp[kFitRing];
+        std::copy (fitRing, fitRing + kFitRing, tmp);
+        std::nth_element (tmp, tmp + kFitRing / 2, tmp + kFitRing);
+        const float med = tmp[kFitRing / 2];
+        fitCount = 0;
+        fitsSeen += kFitRing;
+        tuneEstimate.store (modelTune + med, std::memory_order_relaxed);
+        tuneConfident.store (true, std::memory_order_relaxed);
+        if (! haveCal && tune.autoTune > 0.5f && std::abs (med) >= 2.5f)
+        {
+            modelTune = juce::jlimit (-50.0f, 50.0f, modelTune + med);
+            rebuildModels();
+        }
+    }
+
     void runStage (Pending& p, int stage)
     {
         const bool clamped = stageDue (p, stage) >= p.limit;
@@ -806,6 +1154,8 @@ struct NoteDetector::Impl
         }
 
         PitchSet newExp, newWatch, shown;
+        if (stage == 2 || (clamped && stage == 1))
+            accumulateTuning (b);
 
         if (stage < 3)
         {
@@ -813,22 +1163,31 @@ struct NoteDetector::Impl
             const bool eligible = p.pos >= expectedStamp - expectedSlack;
             // a barely-over-threshold onset (secondary bump after a real note, room noise) must
             // bring more evidence than a clear strike
-            const float needed = tune.expectedMin + (stage == 1 ? tune.stage1Bump : stage == 2 ? tune.stage2Bump : 0.0f)
+            const float neededExtra = (stage == 1 ? tune.stage1Bump : stage == 2 ? tune.stage2Bump : 0.0f)
                                  + tune.weakOnsetPenalty * clamp01 (2.0f - p.strength);
             if (eligible && expected.any())
             {
+                if (tune.explainMin > 0.0f)
+                    buildExplainMask (b);
                 for (int pitch = std::max (kLowestPianoKey, kStageMinPitch[stage]); pitch <= kHighestPianoKey; ++pitch)
                 {
                     if (! expected.test ((size_t) pitch) || p.hitExp.test ((size_t) pitch))
                         continue;
-                    const float f = score (models[(size_t) keyIndex (pitch)], evidExp.data(), b);
+                    Fit fit;
+                    const float f = useFitFor (pitch) ? scoreFit (pitch, evidExp.data(), b, &fit)
+                                                       : score (models[(size_t) keyIndex (pitch)], evidExp.data(), b);
                    #ifdef FALL_DETECT_TRACE
                     std::fprintf (stderr, "[trace] onset %.3f stage %d expected %d F=%.2f null=%.2f\n", (double) p.pos / fs, stage, pitch, (double) f, (double) nullLevel (pitch, evidExp.data(), b));
                    #endif
-                    if (f >= needed * (models[(size_t) keyIndex (pitch)].measured ? tune.measuredScale : 1.0f) && f - nullLevel (pitch, evidExp.data(), b) >= tune.contrastMin && ! betterNeighbour (pitch, f, b))
+                    const float needed = (useFitFor (pitch) ? tune.expectedFitMin : tune.expectedMin) + neededExtra;
+                    if (f >= needed * (models[(size_t) keyIndex (pitch)].measured ? tune.measuredScale : 1.0f) && f - nullLevel (pitch, evidExp.data(), b) >= tune.contrastMin && ! betterNeighbour (pitch, f, b)
+                        && (tune.explainMin <= 0.0f || explainedRatio (pitch, b) >= tune.explainMin)
+                        && (tune.energyMin <= 0.0f || energyRatio (pitch, fit, b) >= tune.energyMin))
                     {
                         newExp.set ((size_t) pitch);
                         p.hitExp.set ((size_t) pitch);
+                        if (useFitFor (pitch) && ! models[(size_t) keyIndex (pitch)].measured)
+                            noteFitted (fit.c);
                     }
                 }
             }
@@ -1116,6 +1475,13 @@ int NoteDetector::process (const float* mono, int numSamples, DetectedOnset* out
 }
 
 float NoteDetector::getInputLevelDb() const noexcept { return impl->levelDb.load (std::memory_order_relaxed); }
+
+float NoteDetector::getTuningCents (bool* confident) const noexcept
+{
+    if (confident != nullptr)
+        *confident = impl->tuneConfident.load (std::memory_order_relaxed);
+    return impl->tuneEstimate.load (std::memory_order_relaxed);
+}
 
 void NoteDetector::beginCapture (int pitch)
 {

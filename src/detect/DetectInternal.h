@@ -52,7 +52,8 @@ struct KeyPartials
 // Builds the partial series for all 88 keys: the generic piano model for uncalibrated keys
 // (or no calibration at all), measured partials for calibrated keys and, in between, the generic
 // model bent towards the nearest measured neighbours (tuning, inharmonicity, weights).
-void buildKeyModels (double sampleRate, const Calibration::Impl* cal, std::array<KeyPartials, kNumKeys>& out);
+// globalCents: the piano's overall tuning offset (from the auto-tuner), applied to uncalibrated keys.
+void buildKeyModels (double sampleRate, const Calibration::Impl* cal, std::array<KeyPartials, kNumKeys>& out, double globalCents = 0.0);
 
 // Only the generic model, exposed for tests/tools.
 void buildGenericModel (int pitch, double sampleRate, KeyPartials& out);

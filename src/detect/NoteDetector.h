@@ -77,6 +77,11 @@ public:
     // Smoothed input level in dBFS, for an input meter.
     float getInputLevelDb() const noexcept;
 
+    // The piano's tuning relative to A440 equal temperament, in cents (-50..50), estimated from
+    // everything heard so far, like a tuner. `confident` is false until enough clear notes were heard.
+    // Uncalibrated keys are matched against this tuning automatically.
+    float getTuningCents (bool* confident = nullptr) const noexcept;
+
     // Developer hook for the eval tool: override one tuning constant by name (e.g. "expectedMin"),
     // applied on top of the sensitivity mapping. Returns false for unknown names. Not for the app.
     bool setTuningOverride (const juce::String& name, float value);

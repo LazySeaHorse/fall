@@ -105,7 +105,7 @@ void buildGenericModel (int pitch, double sampleRate, KeyPartials& out)
     buildBent (pitch, sampleRate, 0.0, inharmonicityB (pitch), 0.0, nullptr, out);
 }
 
-void buildKeyModels (double sampleRate, const Calibration::Impl* cal, std::array<KeyPartials, kNumKeys>& out)
+void buildKeyModels (double sampleRate, const Calibration::Impl* cal, std::array<KeyPartials, kNumKeys>& out, double globalCents)
 {
     for (int idx = 0; idx < kNumKeys; ++idx)
     {
@@ -129,7 +129,7 @@ void buildKeyModels (double sampleRate, const Calibration::Impl* cal, std::array
 
         if (below < 0 && above < 0)
         {
-            buildGenericModel (pitch, sampleRate, out[(size_t) idx]);
+            buildBent (pitch, sampleRate, globalCents, inharmonicityB (pitch), 0.0, nullptr, out[(size_t) idx]);
             continue;
         }
 
