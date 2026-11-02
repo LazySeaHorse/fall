@@ -148,6 +148,7 @@ private:
     juce::VBlankAttachment vblank;
     double lastFrameMs = 0.0, displayTime = 0.0, scriptedTime = 0.0;
     int frameCount = 0, lastLoopPass = 0;
+    double lastOctaveHintMs = -1e9;
     float waitingFor = 0.0f;
 
     Spring settingsSlide { 0.0f, 340.0f, 34.0f };

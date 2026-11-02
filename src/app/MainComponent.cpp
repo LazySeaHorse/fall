@@ -358,6 +358,30 @@ void MainComponent::frame()
             toast.show ("Back to " + (markers[(size_t) e.marker].name.isNotEmpty() ? markers[(size_t) e.marker].name : juce::String ("marker")),
                         theme::loopTint);
 
+        // The commonest Learn-mode mistake: the right key in the wrong octave. Fall rejects it (the
+        // octave above sounds like most of the key below), so say what it heard.
+        if (s.mode == Mode::Learn && s.expected.any() && e.accepted.none() && nowMs - lastOctaveHintMs > 2500.0)
+        {
+            for (int p = 0; p < 128; ++p)
+            {
+                if (! e.pitches.test ((size_t) p) || s.expected.test ((size_t) p))
+                    continue;
+                for (int d : { 12, 24, -12, -24 })
+                {
+                    const int q = p - d;
+                    if (q < 0 || q > 127 || ! s.expected.test ((size_t) q))
+                        continue;
+                    const int oct = std::abs (d) / 12;
+                    toast.show ("You played " + noteName (p) + kDot + "the song wants " + noteName (q) + ", "
+                                    + (oct == 1 ? "an octave " : "two octaves ") + (d > 0 ? "lower" : "higher"),
+                                theme::heard);
+                    lastOctaveHintMs = nowMs;
+                    p = 128;
+                    break;
+                }
+            }
+        }
+
         if (listeningMarker >= 0 && listeningMarker < (int) markers.size() && e.pitches.any())
         {
             for (int p = 0; p < 128; ++p)
@@ -999,6 +1023,7 @@ void MainComponent::openAudioSettings()
 void MainComponent::startCalibration()
 {
     engine.withPlayer ([] (Player& p) { p.setPlaying (false); });
+    engine.setCalibrating (true);
     calibKeys.clear();
     for (int p = 21; p <= 108; p += 3) calibKeys.push_back (p);
     calibIndex = -1;
@@ -1022,6 +1047,7 @@ void MainComponent::nextCalibrationKey (bool)
 void MainComponent::finishCalibration()
 {
     calibIndex = -1;
+    engine.setCalibrating (false);
     calibration.setVisible (false);
     stage.setSpotlight (-1);
     engine.setCalibration (calib);
