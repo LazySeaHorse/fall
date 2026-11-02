@@ -21,12 +21,37 @@ mic -> ring buffer (all sample rates, any block size)
        per bin: is it a spectral peak (prominence over the local lower quartile)
                 AND clearly stronger than before the onset (newness)?  -> evidence 0..1
        per key: weighted fraction of its inharmonic partial series with evidence = score F
-         expected keys   F >= 0.30 (+ weak-onset penalty), not beaten by a non-expected neighbour key
+         expected keys   G3 and up: "tuner" fit - grid search over tuning offset c and inharmonicity
+                         scale; only partials within ~6 cents of the fitted string count (score F')
+                         F' >= 0.20 / bass: F >= 0.35 (+ weak-onset penalty), not beaten by a
+                         non-expected neighbour key, AND >= ~60% of the new power in the key's range
+                         lies on its fitted partials (or other expected keys' partials)
          display pitches greedy "explain and subtract" with chance-corrected scores
          jump keys       late window only (hammer click over), stricter evidence, sole/clean explanation
 ```
 
 Details that matter:
+
+* **Precision, not presence (Nov 2026).** The first version asked "do >= 30% of this key's partials
+  show a new peak inside their +-30-cent windows?". A finger snap, a clap or a voice fills such
+  windows by chance (a snap's reverb tail is full of random spectral peaks), so they satisfied the
+  expected chord 15-20% (voice: ~90%) of the time. Now (1) the key's partials must agree with ONE
+  string: a grid search over the tuning offset (-30..30 cents) and the inharmonicity scale
+  (B x 0..5) predicts every partial, and each partial earns credit only for a peak within
+  max(6 cents, 0.3 bins) of its prediction; and (2) most of the NEW power (post - pre) in the key's
+  frequency range must lie on those fitted partials (+-1.5 bins) or on other expected keys'
+  partials. Broadband noise puts its power everywhere, a voice or a wrong key puts it elsewhere.
+  Bass keys (< G3) keep the window score: their partials are too messy for a tight fit, and the
+  energy check alone keeps noise out there.
+* **Auto-tuner.** Home pianos are rarely at A440, and the precise fit needs the right reference. A
+  histogram of all clear tonal peaks (100-2000 Hz) folded onto the equal-tempered grid gives a coarse
+  lock (used when off by more than 12 cents); after that, the median fitted offset of every 9
+  accepted notes refines it. Uncalibrated key models are rebuilt at the new tuning (cheap, rare).
+  `NoteDetector::getTuningCents()`; shown in Settings -> Listening.
+* **Tried and rejected: reassignment tonality.** Requiring the reassigned frequency of a peak bin
+  and its neighbours to agree (a sinusoid's main lobe points at one frequency, noise doesn't)
+  separates noise poorly in onset windows: the note starts inside the window, which breaks the
+  sinusoid model. Still in the code (`tonalTol`, off by default) for experiments.
 
 * **Only new energy counts.** Evidence needs `P_post / P_pre` to be high, so a ringing (pedalled)
   note is not reported again, while a repeated key is (its strike adds energy on top of the
@@ -64,7 +89,8 @@ block, worst block 2 ms (an onset's second-stage FFTs). `process()` allocates no
 All in `NoteDetector::Impl::Tune`, derived from `setSensitivity()` (0..1, default 0.6) in
 `applySensitivity()`. Any of them can be overridden by name with `setTuningOverride()` or
 `fall_detect_eval --param name=value` (for sweeps): `zOnset`, `zComb` (onset thresholds), `promLo/Hi`,
-`newLo/Hi` (evidence ramps, dB), `expectedMin`, `expectedNewRelief`, `weakOnsetPenalty`,
+`newLo/Hi` (evidence ramps, dB), `expectedMin`, `expectedFitMin`, `fitTolCents`, `fitTolBins`,
+`fitMinPitch`, `energyMin`, `energyLobe`, `autoTune`, `useFit`, `expectedNewRelief`, `weakOnsetPenalty`,
 `settleStrength`, `neighbourMargin`, `measuredScale`, `displayMin`, `displaySel`, `chanceCoef`,
 `watchMin`, `watchSel`, `watchContrast`, `watchIndependent`, `watchStrictDb`, `subharmonicMin`,
 `watchPrefilter`. Timing constants (stage delays 30/65/90/240 ms, refractory 50 ms, settle 150 ms)
@@ -81,6 +107,11 @@ semitone, clean) 1-2%; 0.6 -> 95.9% / 5-5.5%; 0.9 -> 98.8% / 7%, but 56 prematur
   and runs sox "laptop mic" chains (`clean`, `easy`, `medium`, `hard`: high-pass 150-200 Hz,
   low-pass 7-8 kHz, reverb, pink noise down to ~25 dB SNR, compressor/AGC, level wobble) into
   `data/generated/<level>/` (git-ignored) with MIDI + CSV ground truth in `data/generated/midi/`.
+* `tools/detect/gen_noises.py` synthesises non-piano sounds (finger snaps, claps, knocks, taps,
+  typing, a spoon on a mug, a sung vowel) through the same mic chains:
+  `data/generated/<level>/noises.wav` + `data/generated/midi/noises_events.csv`.
+  `fall_detect_eval --transients <wav> <csv>` sets a random expected chord before every event
+  and reports how often it is (wrongly) satisfied, per kind.
 * `fall_detect_eval` (target in `tools/detect_eval`):
   `fall_detect_eval --dir data/generated/medium --truth data/generated/midi [--quiet]` or
   `fall_detect_eval rec.wav played.mid [--offset s]` for real recordings (MIDI of what was played,
@@ -92,6 +123,34 @@ semitone, clean) 1-2%; 0.6 -> 95.9% / 5-5.5%; 0.9 -> 98.8% / 7%, but 56 prematur
   played once, e.g. `scale.wav`), `-v` lists misses and odd accepts.
 
 ## Measured results
+
+**Current detector (fitted partials + energy check + auto-tuner), sensitivity 0.6.**
+
+| level  | learn note recall | chords complete | wrong-note accept, clean ctx (+-1 st) | display P / R / F1 |
+|--------|------|------|---------|----------------------|
+| clean  | 94.6% | 92.1% | 5.5% / 9.0% | 97.4 / 93.7 / 95.5 |
+| medium | 93.0% | 90.1% | 5.0% / 4.5% | 97.6 / 91.6 / 94.5 |
+| hard   | 84.5% | 79.7% | 4.5% / 4.5% | 97.8 / 83.0 / 89.8 |
+
+False accepts on non-piano sounds (random expected chord per event, 96 events per kind):
+
+| sound | old (easy / medium) | now (easy / medium) |
+|-------|------|------|
+| clap | 19.8% / 18.8% | 5.2% / 3.1% |
+| snap | 2.1% / 6.2% | 1.0% / 4.2% |
+| typing | 3.1% / 16.7% | 1.0% / 6.2% |
+| knock | 0.0% / 3.1% | 3.1% / 4.2% |
+| sung vowel | 88.5% / 86.5% | 49% / 51% |
+
+The vowel stays high when its formant harmonics coincide with the expected notes, which is
+physically close to singing the note. Cost: about 3 points of recall on synthetic material (the
+old detector: 95.7% / 88.5% medium / hard). Detuned pianos (sox pitch shift of the medium set):
+30 cents flat 89%, 20 cents sharp 89%, 45 cents flat 81%; the tuner reads -27, +21, -42.
+Fitting all keys including the bass (`fitMinPitch=21`) cuts semitone wrong-note accepts to 0.5%
+but costs 6 more points of recall; misses hurt more than false accepts, so the bass keeps the
+window score.
+
+**First version (for reference):**
 
 Synthetic data (FluidR3 piano through the sox mic chains, 48 kHz, 10 ms blocks), six pieces
 (chords, ode_to_joy, mixed, pedal, repeated, scale; 1480 notes, 915 chords). Learn mode: the
@@ -148,8 +207,14 @@ Other measurements:
   trigger false hits). Fine for learn mode (the song waits), not for free transcription.
 * A very soft repeat of a loud ringing note (more than ~6 dB below the ringing partials) is missed.
 * Hard level (SNR ~20 dB in reverberant room with strong compressor): 87% recall.
-* Not tested against a real microphone yet: the real thing may need a different `expectedMin`.
-  Use `fall_detect_eval` on a recording + the MIDI of what was played, sweep `--param`.
+* Not tested against a real microphone yet: the real thing may need different thresholds.
+  *Settings -> Save what Fall heard* writes the last 90 s of microphone audio
+  (`Documents/Fall recordings/fall-<date>.wav`) plus a CSV of what was expected and heard; replay
+  the WAV with `fall_detect_eval` and sweep `--param`.
+* **Windows voice processing.** Laptop microphones on Windows go through noise suppression /
+  "Voice Clarity" / AGC, which treat a sustained piano tone as noise. Fall asks WASAPI for the raw
+  stream (`AUDCLNT_STREAMOPTIONS_RAW`, patched into JUCE by `cmake/PatchJuceWasapiRaw.cmake`;
+  Settings -> Raw microphone). Devices without raw support ignore the request.
 
 ## Integration notes
 

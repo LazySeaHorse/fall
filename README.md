@@ -6,12 +6,13 @@ your acoustic piano. Fall listens through the laptop microphone, so the piano ne
 connection.
 
 - **Two modes.** *Free play* scrolls in time. *Learn* waits for you to play each chord.
-- **Your own instruments.** Fall plays the song through any VST3 instrument you have installed,
-  such as Pianoteq, and keeps its preset between sessions. A small built-in piano covers the case
+- **Your own instruments.** Fall plays the song through any VST3 or older VST2 (.dll) instrument you
+  have installed, such as Pianoteq, and keeps its preset between sessions. A small built-in piano covers the case
   where you haven't picked one.
 - **Hearing your piano.** Fall knows which notes come next, so it only has to check whether they
-  were played. That keeps it fast, at a few tens of milliseconds. The keys it hears show on screen
-  as purple dots.
+  were played. That keeps it fast, at a few tens of milliseconds. It checks that what it hears lines
+  up with the strings of those keys, like a tuner, so snaps, claps and typing don't count. It also
+  works out your piano's tuning by itself. The keys it hears show on screen as pink dots.
 - **Calibration.** *Settings → Teach Fall my piano* has you play about 30 keys, so Fall learns how
   your piano sounds through your microphone.
 - **Jump keys.** Drop markers on the timeline (`M` or right-click) and bind each one to a piano
@@ -45,14 +46,19 @@ piano.
 
 - **Use headphones** for Fall's own sound. Then the microphone only hears your real piano.
 - In *Windows Settings → Privacy & security → Microphone*, allow desktop apps to use the microphone.
-- If notes are missed, turn off *Audio enhancements* for the laptop microphone (Sound settings →
-  your microphone → Advanced). Noise suppression and auto-gain dull the start of each note.
-  Raising *Sensitivity* in Fall's settings also helps.
+- Fall asks Windows for the *raw* microphone signal, without the voice effects (noise suppression,
+  auto-gain) that treat piano tones as noise. If notes are still missed, also turn off *Audio
+  enhancements* for the microphone (Sound settings → your microphone → Advanced). Raising
+  *Sensitivity* in Fall's settings also helps.
+- **Detection problems?** *Settings → Save what Fall heard* saves the last 90 seconds from the
+  microphone, with what Fall expected and heard, to `Documents\Fall recordings`. Those two files are
+  what's needed to tune the detector to your piano and room.
 
 ## Download
 
-Every push to `main` builds `Fall-windows-x64.zip` on GitHub Actions (look under the run's
-*Artifacts*). Tagged versions (`v0.1.0`, …) also appear on the Releases page. See
+Every push to `main` builds `Fall-windows-x64.zip` and `Fall-windows-x86.zip` on GitHub Actions
+(look under the run's *Artifacts*). Use the x86 (32-bit) build only for 32-bit plugins such as
+older Pianoteq versions installed under `Program Files (x86)`. Tagged versions (`v0.1.0`, …) also appear on the Releases page. See
 [docs/ci.md](docs/ci.md).
 
 ## Building
@@ -86,7 +92,7 @@ The flags are `--frames-dir DIR`, `--loop A:B`, `--marker T:PITCH:NAME`, `--hand
 | --- | --- |
 | `src/core` | Song model, MIDI import, the `Player` that plays, loops and waits in Learn mode (no UI, unit-tested) |
 | `src/detect` | Real-time note detection from the microphone ([docs/detection.md](docs/detection.md)) |
-| `src/app` | The JUCE desktop app: audio engine, VST3 hosting, waterfall, controls |
+| `src/app` | The JUCE desktop app: audio engine, VST3/VST2 hosting, waterfall, controls |
 | `tests` | Catch2 tests, plus a VST3 hosting test |
 | `tools` | MIDI fixture generator, detector evaluation tools, the test synth |
 
