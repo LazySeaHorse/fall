@@ -1,7 +1,8 @@
 #include "AudioEngine.h"
 
 #if JUCE_WINDOWS
-namespace juce { extern bool fallWasapiRawInput; } // cmake/PatchJuceWasapiRaw.cmake
+// Defined by cmake/PatchJuceWasapiRaw.cmake inside JUCE's WASAPI code (namespace juce::WasapiClasses).
+namespace juce::WasapiClasses { extern bool fallWasapiRawInput; }
 #endif
 
 
@@ -25,9 +26,9 @@ AudioEngine::~AudioEngine()
 void AudioEngine::setRawMicrophone (bool raw)
 {
    #if JUCE_WINDOWS
-    if (juce::fallWasapiRawInput == raw)
+    if (juce::WasapiClasses::fallWasapiRawInput == raw)
         return;
-    juce::fallWasapiRawInput = raw;
+    juce::WasapiClasses::fallWasapiRawInput = raw;
     if (deviceManager.getCurrentAudioDevice() != nullptr)
     {
         deviceManager.closeAudioDevice();

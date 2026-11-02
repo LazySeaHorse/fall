@@ -5,7 +5,7 @@
 # noise to be removed and squashes note onsets, which is poison for note detection. JUCE declares
 # IAudioClient2::SetClientProperties but never calls it, so we add the call here.
 #
-# The switch is the global `juce::fallWasapiRawInput` (default true), read whenever an input device
+# The switch is the global `juce::WasapiClasses::fallWasapiRawInput` (default true), read whenever an input device
 # is opened; Fall's settings can turn it off for drivers that misbehave in raw mode.
 #
 # Usage: include() after FetchContent_MakeAvailable(JUCE). Idempotent; fails loudly if JUCE's code
