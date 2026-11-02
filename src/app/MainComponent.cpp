@@ -16,8 +16,13 @@ namespace
 }
 
 // ---------------------------------------------------------------------------------------------
-LaunchOptions LaunchOptions::parse (const juce::StringArray& args)
+LaunchOptions LaunchOptions::parse (const juce::StringArray& rawArgs)
 {
+    // Windows hands us the raw command line, quotes included ("C:\path with spaces\x.mid").
+    juce::StringArray args;
+    for (const auto& a : rawArgs)
+        args.add (a.trim().unquoted());
+
     LaunchOptions o;
     auto next = [&] (int& i) { return i + 1 < args.size() ? args[++i] : juce::String(); };
 
@@ -61,7 +66,7 @@ LaunchOptions LaunchOptions::parse (const juce::StringArray& args)
             o.height = v.fromFirstOccurrenceOf ("x", false, true).getIntValue();
         }
         else if (a.endsWithIgnoreCase (".mid") || a.endsWithIgnoreCase (".midi"))
-            o.midi = juce::File::getCurrentWorkingDirectory().getChildFile (a.unquoted());
+            o.midi = juce::File::getCurrentWorkingDirectory().getChildFile (a);
     }
     if (o.scripted()) o.noAudio = true;
     return o;
