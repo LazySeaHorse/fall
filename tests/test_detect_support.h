@@ -22,6 +22,7 @@ struct SynthNote
     double start;      // seconds
     double duration;   // key held this long (the string then decays quickly)
     float  velocity = 0.7f; // 0..1
+    double cents = 0.0;     // detuning of this string from A440 equal temperament
 };
 
 struct Environment
@@ -48,7 +49,7 @@ inline double hz (int pitch) { return 440.0 * std::pow (2.0, (pitch - 69) / 12.0
 
 inline void addPianoNote (std::vector<float>& buf, const SynthNote& n, double sr, Rng& rng)
 {
-    const double f0 = hz (n.pitch);
+    const double f0 = hz (n.pitch) * std::pow (2.0, n.cents / 1200.0);
     const double B  = n.pitch < 45 ? 1.5e-4 : 8e-5 * std::pow (2.0, (n.pitch - 45) / 8.0);
     // sustain time depends on register: bass strings ring for many seconds, treble ones die quickly
     const double tau0 = 6.0 * std::pow (2.0, -(n.pitch - 21) / 22.0) + 0.5;

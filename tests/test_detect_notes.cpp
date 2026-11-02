@@ -250,3 +250,98 @@ TEST_CASE ("input level meter tracks the signal", "[detect]")
     CHECK (det.getInputLevelDb() > -12.0f);
     CHECK (det.getInputLevelDb() < -6.0f);
 }
+
+TEST_CASE ("snaps / claps / clicks do not satisfy an expected note", "[detect]")
+{
+    // Broadband bursts in a quiet room, each with a fresh expected chord: the old "fraction of
+    // partials with a peak" test let these through; the fitted-partials and energy checks must not.
+    const double sr = 48000.0;
+    Environment env;
+    env.noiseDb = -70.0;
+    std::vector<float> audio = renderScene ({}, 40.0, env);
+    Rng rng (99);
+    std::vector<double> times;
+    for (int i = 0; i < 24; ++i)
+    {
+        const double t = 1.0 + 1.6 * i;
+        times.push_back (t);
+        // band-limited noise burst (1-6 kHz-ish via a crude difference filter), 3-10 ms decay
+        const double tau = 0.003 + 0.007 * rng.uniform();
+        const float amp = 0.1f + 0.4f * rng.uniform();
+        float prev = 0.0f;
+        for (int k = 0; k < (int) (0.15 * sr); ++k)
+        {
+            const float w = rng.gauss();
+            const float hp = w - prev;
+            prev = w;
+            audio[(size_t) (t * sr) + (size_t) k] += amp * hp * (float) std::exp (-(double) k / sr / tau);
+        }
+    }
+    NoteDetector det;
+    det.prepare (sr, kBlock);
+    det.setSensitivity (0.7f);
+    int accepted = 0;
+    size_t next = 0;
+    const int chords[6][3] = { { 60, 64, 67 }, { 72, 0, 0 }, { 55, 59, 62 }, { 84, 88, 0 }, { 48, 0, 0 }, { 65, 69, 72 } };
+    for (size_t pos = 0; pos < audio.size(); pos += kBlock)
+    {
+        const double now = (double) pos / sr;
+        if (next < times.size() && now >= times[next] - 0.5)
+        {
+            PitchSet c;
+            for (int p : chords[next % 6]) if (p > 0) c.set ((size_t) p);
+            det.setExpected (c);
+            ++next;
+        }
+        DetectedOnset out[8];
+        const int n = det.process (audio.data() + pos, (int) std::min<size_t> (kBlock, audio.size() - pos), out, 8);
+        for (int i = 0; i < n; ++i)
+            accepted += out[i].expectedHits.any() ? 1 : 0;
+    }
+    CHECK (accepted <= 1);
+}
+
+TEST_CASE ("the auto-tuner follows a piano that is not tuned to A440", "[detect]")
+{
+    // A piano 30 cents flat: after a few notes the detector knows, and still hears what is played.
+    const double sr = 48000.0;
+    std::vector<SynthNote> notes;
+    const int melody[] = { 60, 62, 64, 65, 67, 69, 71, 72, 74, 76, 77, 79, 81, 72, 67, 64, 60, 64, 67, 72,
+                           62, 65, 69, 74, 64, 67, 71, 76, 65, 69, 72, 77 };
+    double t = 1.0;
+    for (int p : melody)
+    {
+        notes.push_back ({ p, t, 0.4, 0.7f, -30.0 });
+        t += 0.6;
+    }
+    const auto audio = renderScene (notes, t + 1.0, Environment());
+    NoteDetector det;
+    det.prepare (sr, kBlock);
+    size_t g = 0;
+    det.setExpected (setOf ({ notes[0].pitch }));
+    int hitsLate = 0;
+    for (size_t pos = 0; pos < audio.size(); pos += kBlock)
+    {
+        DetectedOnset out[8];
+        const int n = det.process (audio.data() + pos, (int) std::min<size_t> (kBlock, audio.size() - pos), out, 8);
+        for (int i = 0; i < n; ++i)
+            if (g < notes.size() && out[i].expectedHits.test ((size_t) notes[g].pitch))
+            {
+                hitsLate += g >= 16 ? 1 : 0;
+                ++g;
+                if (g < notes.size())
+                    det.setExpected (setOf ({ notes[g].pitch }));
+            }
+        // a missed note: move on shortly before the next one, like the eval tool does
+        if (g < notes.size() && g + 1 < notes.size() && (double) pos / sr > notes[g + 1].start - 0.15)
+        {
+            ++g;
+            det.setExpected (setOf ({ notes[g].pitch }));
+        }
+    }
+    bool confident = false;
+    const float cents = det.getTuningCents (&confident);
+    CHECK (confident);
+    CHECK (std::abs (cents + 30.0f) < 6.0f);
+    CHECK (hitsLate >= 14); // of the 16 notes after the tuner settled
+}
