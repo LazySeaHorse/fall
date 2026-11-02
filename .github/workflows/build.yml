@@ -1,0 +1,236 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Never cancel a tag build half way through a release.
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+permissions:
+  contents: read
+
+env:
+  # Keep in sync with FetchContent_Declare() in CMakeLists.txt (checked below).
+  JUCE_TAG: 8.0.12
+  CATCH2_TAG: v3.7.1
+
+jobs:
+  windows:
+    name: Windows x64 (MSVC, Release)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check dependency tags match CMakeLists.txt
+        shell: bash
+        run: |
+          grep -Eq "GIT_TAG +${JUCE_TAG}\$" CMakeLists.txt   || { echo "JUCE_TAG in build.yml is out of date"; exit 1; }
+          grep -Eq "GIT_TAG +${CATCH2_TAG}\$" CMakeLists.txt || { echo "CATCH2_TAG in build.yml is out of date"; exit 1; }
+
+      # Cache the dependency sources (not build output) so a run does not
+      # depend on GitHub being reachable for every JUCE/Catch2 clone.
+      - name: Cache dependency sources
+        id: deps
+        uses: actions/cache@v4
+        with:
+          path: deps-cache
+          key: deps-${{ runner.os }}-juce-${{ env.JUCE_TAG }}-catch2-${{ env.CATCH2_TAG }}
+
+      - name: Fetch dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          git clone --quiet --depth 1 --branch "$JUCE_TAG"   https://github.com/juce-framework/JUCE.git deps-cache/JUCE
+          git clone --quiet --depth 1 --branch "$CATCH2_TAG" https://github.com/catchorg/Catch2.git     deps-cache/Catch2
+
+      - name: Set up MSVC environment (x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          $deps = "$env:GITHUB_WORKSPACE/deps-cache".Replace('\', '/')
+          # Static CRT: Fall.exe must run on a machine without the VC++ redistributable.
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=cl `
+            -DCMAKE_CXX_COMPILER=cl `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+            -DFALL_BUILD_TESTSYNTH=ON `
+            "-DFETCHCONTENT_SOURCE_DIR_JUCE=$deps/JUCE" `
+            "-DFETCHCONTENT_SOURCE_DIR_CATCH2=$deps/Catch2"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake --build build --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Test
+        shell: pwsh
+        run: |
+          ctest --test-dir build --output-on-failure --timeout 120 -C Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Locate Fall.exe
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path build -Recurse -Filter Fall.exe -File |
+                 Where-Object { $_.FullName -notmatch 'CMakeFiles' } |
+                 Select-Object -First 1
+          if (-not $exe) { throw 'Fall.exe not found under build/' }
+          Write-Host "Found $($exe.FullName)"
+          "FALL_EXE=$($exe.FullName)" >> $env:GITHUB_ENV
+
+      - name: Screenshot smoke test
+        shell: pwsh
+        run: |
+          $shot = Join-Path $env:GITHUB_WORKSPACE 'shot.png'
+          $midi = Join-Path $env:GITHUB_WORKSPACE 'tests/data/ode_to_joy.mid'
+          Remove-Item $shot -ErrorAction SilentlyContinue
+          $p = Start-Process -FilePath $env:FALL_EXE -PassThru `
+                 -ArgumentList '--screenshot', "`"$shot`"", '--midi', "`"$midi`"", '--seek', '6'
+          $null = $p.Handle  # keep the handle so ExitCode is available after exit
+          if (-not $p.WaitForExit(60000)) {
+            Stop-Process -Id $p.Id -Force
+            throw 'Fall.exe --screenshot timed out after 60 s'
+          }
+          Write-Host "Fall.exe exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { throw "Fall.exe exited with code $($p.ExitCode)" }
+          if (-not (Test-Path $shot) -or (Get-Item $shot).Length -eq 0) { throw 'shot.png is missing or empty' }
+
+      - name: Package Fall.exe
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Copy-Item $env:FALL_EXE dist/Fall.exe
+          Copy-Item LICENSE dist/LICENSE
+          Compress-Archive -Path dist/Fall.exe, dist/LICENSE -DestinationPath Fall-windows-x64.zip -Force
+
+      - name: Upload Fall-windows-x64
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fall-windows-x64
+          path: Fall-windows-x64.zip
+          if-no-files-found: error
+
+      - name: Upload screenshots-windows
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-windows
+          path: shot.png
+          if-no-files-found: ignore
+
+  linux:
+    name: Linux x64 (GCC, Release)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check dependency tags match CMakeLists.txt
+        run: |
+          grep -Eq "GIT_TAG +${JUCE_TAG}\$" CMakeLists.txt   || { echo "JUCE_TAG in build.yml is out of date"; exit 1; }
+          grep -Eq "GIT_TAG +${CATCH2_TAG}\$" CMakeLists.txt || { echo "CATCH2_TAG in build.yml is out of date"; exit 1; }
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config git \
+            libasound2-dev libx11-dev libxext-dev libxrender-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libxcomposite-dev \
+            libfreetype-dev libfontconfig1-dev libgl1-mesa-dev libglu1-mesa-dev \
+            xvfb xauth
+
+      - name: Cache dependency sources
+        id: deps
+        uses: actions/cache@v4
+        with:
+          path: deps-cache
+          key: deps-${{ runner.os }}-juce-${{ env.JUCE_TAG }}-catch2-${{ env.CATCH2_TAG }}
+
+      - name: Fetch dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        run: |
+          git clone --quiet --depth 1 --branch "$JUCE_TAG"   https://github.com/juce-framework/JUCE.git deps-cache/JUCE
+          git clone --quiet --depth 1 --branch "$CATCH2_TAG" https://github.com/catchorg/Catch2.git     deps-cache/Catch2
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-${{ github.ref_name }}
+          restore-keys: linux-
+          max-size: 500M
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DFALL_BUILD_TESTSYNTH=ON \
+            -DFETCHCONTENT_SOURCE_DIR_JUCE="$GITHUB_WORKSPACE/deps-cache/JUCE" \
+            -DFETCHCONTENT_SOURCE_DIR_CATCH2="$GITHUB_WORKSPACE/deps-cache/Catch2"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test (under Xvfb)
+        run: xvfb-run -a ctest --test-dir build --output-on-failure --timeout 120
+
+      - name: Screenshot smoke test (under Xvfb)
+        run: |
+          exe=$(find build -type f -name Fall -path '*_artefacts*' | head -n 1)
+          if [ -z "$exe" ]; then echo "Fall binary not found under build/"; exit 1; fi
+          echo "Using $exe"
+          rm -f shot.png
+          xvfb-run -a -s "-screen 0 1280x800x24" \
+            timeout -k 5 60 "$exe" --screenshot shot.png --midi tests/data/ode_to_joy.mid --seek 6
+          test -s shot.png
+
+      - name: Upload screenshots-linux
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-linux
+          path: shot.png
+          if-no-files-found: ignore
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows build
+        uses: actions/download-artifact@v4
+        with:
+          name: Fall-windows-x64
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          flags=(--generate-notes)
+          case "$TAG" in *-*) flags+=(--prerelease) ;; esac
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" Fall-windows-x64.zip --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" Fall-windows-x64.zip --title "$TAG" "${flags[@]}" --repo "$GITHUB_REPOSITORY"
+          fi
