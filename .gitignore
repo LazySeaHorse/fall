@@ -8,3 +8,4 @@
 /data/recordings/*.wav
 Testing/
 /.claude/
+__pycache__/
