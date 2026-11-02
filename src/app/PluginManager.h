@@ -7,7 +7,7 @@
 namespace fall
 {
 
-// Finds installed VST3 instruments and creates instances of them.
+// Finds installed VST3 and VST2 instruments and creates instances of them.
 class PluginManager : private juce::Thread
 {
 public:
@@ -20,7 +20,7 @@ public:
     // Instruments only, sorted by name.
     juce::Array<juce::PluginDescription> getInstruments() const;
 
-    // Scan the standard VST3 folders in the background. `onDone` runs on the message thread.
+    // Scan the standard VST3 and VST2 folders in the background. `onDone` runs on the message thread.
     void scan (std::function<void()> onDone);
     bool isScanning() const { return isThreadRunning(); }
     juce::String getCurrentlyScanning() const;
