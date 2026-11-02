@@ -1,3 +1,3 @@
-// Maps the include path JUCE expects onto FST, a GPLv3 reverse-engineered VST2 header.
+// See aeffect.h: FST keeps everything in one header.
 #pragma once
-#include <fst/aeffectx.h>
+#include "aeffect.h"
