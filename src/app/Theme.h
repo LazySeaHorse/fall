@@ -44,10 +44,12 @@ namespace theme
     // The stage (waterfall) is always dark: it's a light show, and it keeps contrast high.
     inline const juce::Colour stageTop    { 0xff07070b };
     inline const juce::Colour stageBottom { 0xff111119 };
-    inline const juce::Colour rightHand   { 0xff4fb8ff };
-    inline const juce::Colour leftHand    { 0xffff9f2e };
-    inline const juce::Colour heard       { 0xffc77dff };
-    inline const juce::Colour good        { 0xff34d399 };
+    // Pastel teal (right hand) and pastel purple (left hand), matching the app icon. "Heard" and
+    // "accepted" stay clear of both: soft pink and soft lime.
+    inline const juce::Colour rightHand   { 0xff7ee0d2 };
+    inline const juce::Colour leftHand    { 0xffb9a5ff };
+    inline const juce::Colour heard       { 0xffff9cc8 };
+    inline const juce::Colour good        { 0xffa8e86c };
     inline const juce::Colour loopTint    { 0xffffd60a };
 
     inline juce::Colour handColour (bool right) { return right ? rightHand : leftHand; }
