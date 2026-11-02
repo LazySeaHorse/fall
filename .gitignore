@@ -1,0 +1,9 @@
+/build*/
+/out/
+/.vs/
+/.vscode/
+/.cache/
+*.user
+/data/generated/
+/data/recordings/*.wav
+Testing/
