@@ -46,13 +46,70 @@ juce::String PluginManager::getCurrentlyScanning() const
     return scanningName;
 }
 
+juce::FileSearchPath PluginManager::searchPathFor (juce::AudioPluginFormat& format)
+{
+    auto path = format.getDefaultLocationsToSearch();
+
+   #if JUCE_WINDOWS
+    if (format.getName() == "VST")
+    {
+        // Older instruments install in all sorts of places; these are the common ones, in both
+        // Program Files folders. Ones with the wrong bitness are skipped and reported separately.
+        const juce::File roots[] = { juce::File::getSpecialLocation (juce::File::globalApplicationsDirectory),
+                                     juce::File::getSpecialLocation (juce::File::globalApplicationsDirectoryX86) };
+        const char* subs[] = { "Steinberg\\VstPlugins", "Steinberg\\VSTPlugins", "VstPlugins", "VSTPlugins",
+                               "Common Files\\VST2", "Common Files\\Steinberg\\VST2", "Vstplugins" };
+        for (const auto& root : roots)
+            for (auto* sub : subs)
+                if (auto dir = root.getChildFile (sub); dir.isDirectory())
+                    path.addIfNotAlreadyThere (dir);
+    }
+   #endif
+    path.removeNonExistentPaths();
+    return path;
+}
+
+int PluginManager::dllBits (const juce::File& file)
+{
+    juce::FileInputStream in (file);
+    if (! in.openedOk() || in.readShort() != 0x5a4d) // "MZ"
+        return 0;
+    in.setPosition (0x3c);
+    const auto peOffset = (juce::int64) (juce::uint32) in.readInt();
+    in.setPosition (peOffset);
+    if (in.readInt() != 0x00004550) // "PE\0\0"
+        return 0;
+    switch ((juce::uint16) in.readShort())
+    {
+        case 0x014c: return 32; // x86
+        case 0x8664: return 64; // x64
+        case 0xaa64: return 64; // arm64
+        default:     return 0;
+    }
+}
+
+juce::StringArray PluginManager::getWrongArchitecture() const
+{
+    const juce::ScopedLock sl (nameLock);
+    return wrongArch;
+}
+
 void PluginManager::run()
 {
+    juce::StringArray mismatched;
+
     for (auto* format : formats.getFormats())
     {
+        const auto path = searchPathFor (*format);
+
+        if (format->getName() == "VST")
+            for (int i = 0; i < path.getNumPaths(); ++i)
+                for (const auto& f : path[i].findChildFiles (juce::File::findFiles, true, "*.dll"))
+                    if (const int bits = dllBits (f); bits != 0 && bits != processBits())
+                        mismatched.addIfNotAlreadyThere (f.getFileNameWithoutExtension() + " (" + juce::String (bits) + "-bit)");
+
         // A plugin that crashed a previous scan is listed in the dead man's pedal file and skipped.
-        juce::PluginDirectoryScanner scanner (knownList, *format, format->getDefaultLocationsToSearch(),
-                                              true, deadMansPedal, false);
+        juce::PluginDirectoryScanner scanner (knownList, *format, path, true, deadMansPedal, false);
         juce::String name;
         while (! threadShouldExit())
         {
@@ -68,23 +125,44 @@ void PluginManager::run()
     {
         const juce::ScopedLock sl (nameLock);
         scanningName = {};
+        wrongArch = mismatched;
     }
 
     juce::MessageManager::callAsync ([this] { if (scanDone) scanDone(); });
 }
 
-juce::Array<juce::PluginDescription> PluginManager::addFile (const juce::File& file)
+PluginManager::AddResult PluginManager::addFile (const juce::File& file)
 {
-    juce::Array<juce::PluginDescription> found;
+    AddResult r;
+
+    if (file.hasFileExtension (".dll"))
+    {
+        const int bits = dllBits (file);
+        if (bits != 0 && bits != processBits())
+        {
+            r.problem = file.getFileNameWithoutExtension() + " is a " + juce::String (bits) + "-bit plugin. Use the "
+                        + juce::String (bits) + "-bit version of Fall (Fall-windows-" + (bits == 32 ? "x86" : "x64") + ") to load it.";
+            return r;
+        }
+    }
+
+    bool anyFound = false;
     for (auto* format : formats.getFormats())
     {
+        if (! format->fileMightContainThisPluginType (file.getFullPathName()))
+            continue;
         juce::OwnedArray<juce::PluginDescription> types;
         knownList.scanAndAddFile (file.getFullPathName(), true, types, *format);
+        anyFound |= ! types.isEmpty();
         for (auto* t : types)
             if (t->isInstrument)
-                found.add (*t);
+                r.instruments.add (*t);
     }
-    return found;
+
+    if (r.instruments.isEmpty())
+        r.problem = anyFound ? file.getFileName() + " is an effect, not an instrument"
+                             : "Couldn't load " + file.getFileName() + " as a plugin";
+    return r;
 }
 
 void PluginManager::load (const juce::PluginDescription& d, double sampleRate, int blockSize, LoadCallback cb)
