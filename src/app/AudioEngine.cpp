@@ -134,14 +134,17 @@ void AudioEngine::processBlock (const float* const* inputs, int numIn, float* co
                 pushHeard (e);
                 recorder.logHeard (o.samplePosition, e.pitches, e.accepted, e.latencyMs);
             }
-            if (player.getGroupsCompleted() != expectedGroups || player.nextGroupTime() != expectedGate)
+            const bool calib = calibrating.load();
+            if (calib != wasCalibrating || player.getGroupsCompleted() != expectedGroups || player.nextGroupTime() != expectedGate)
             {
+                wasCalibrating = calib;
                 expectedGroups = player.getGroupsCompleted();
                 expectedGate = player.nextGroupTime();
-                detector.setExpected (player.expectedPitches());
-                recorder.logExpected (player.expectedPitches());
+                const PitchSet exp = calib ? PitchSet() : player.expectedPitches();
+                detector.setExpected (exp);
+                recorder.logExpected (exp);
             }
-            detector.setWatchKeys (player.jumpKeys());
+            detector.setWatchKeys (calib ? PitchSet() : player.jumpKeys());
             inputDb.store (detector.getInputLevelDb());
         }
 

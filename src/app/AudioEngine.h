@@ -79,6 +79,8 @@ public:
     // ---- Microphone / detector ----
     void  setMicEnabled (bool shouldListen) noexcept { micEnabled.store (shouldListen); }
     bool  isMicEnabled() const noexcept { return micEnabled.load(); }
+    // While calibrating, what the microphone hears must not play the song (or fire jump keys).
+    void  setCalibrating (bool on) noexcept { calibrating.store (on); }
     void  setSensitivity (float s);
     void  setCalibration (const Calibration& c);
     void  beginCapture (int pitch);
@@ -145,8 +147,10 @@ private:
     // the chord the player waits for actually changes.
     int    expectedGroups = -1;
     double expectedGate = -1e9;
+    bool   wasCalibrating = false;
     std::atomic<bool>  deviceRunning { false };
     std::atomic<bool>  micEnabled { true };
+    std::atomic<bool>  calibrating { false };
     std::atomic<int>   numInputs { 0 };
     std::atomic<float> inputDb { -100.0f };
     std::atomic<float> masterGain { 1.0f };
