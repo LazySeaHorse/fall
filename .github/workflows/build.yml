@@ -22,9 +22,14 @@ env:
 
 jobs:
   windows:
-    name: Windows x64 (MSVC, Release)
+    name: Windows ${{ matrix.arch }} (MSVC, Release)
     runs-on: windows-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # x86 exists for old 32-bit instruments (e.g. a 32-bit VST2 .dll), which a 64-bit app can't load.
+        arch: [x64, x86]
     steps:
       - uses: actions/checkout@v4
 
@@ -50,10 +55,10 @@ jobs:
           git clone --quiet --depth 1 --branch "$JUCE_TAG"   https://github.com/juce-framework/JUCE.git deps-cache/JUCE
           git clone --quiet --depth 1 --branch "$CATCH2_TAG" https://github.com/catchorg/Catch2.git     deps-cache/Catch2
 
-      - name: Set up MSVC environment (x64)
+      - name: Set up MSVC environment (${{ matrix.arch }})
         uses: ilammy/msvc-dev-cmd@v1
         with:
-          arch: x64
+          arch: ${{ matrix.arch }}
 
       - name: Configure
         shell: pwsh
@@ -115,20 +120,20 @@ jobs:
           New-Item -ItemType Directory -Path dist -Force | Out-Null
           Copy-Item $env:FALL_EXE dist/Fall.exe
           Copy-Item LICENSE dist/LICENSE
-          Compress-Archive -Path dist/Fall.exe, dist/LICENSE -DestinationPath Fall-windows-x64.zip -Force
+          Compress-Archive -Path dist/Fall.exe, dist/LICENSE -DestinationPath Fall-windows-${{ matrix.arch }}.zip -Force
 
-      - name: Upload Fall-windows-x64
+      - name: Upload Fall-windows-${{ matrix.arch }}
         uses: actions/upload-artifact@v4
         with:
-          name: Fall-windows-x64
-          path: Fall-windows-x64.zip
+          name: Fall-windows-${{ matrix.arch }}
+          path: Fall-windows-${{ matrix.arch }}.zip
           if-no-files-found: error
 
       - name: Upload screenshots-windows
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: screenshots-windows
+          name: screenshots-windows-${{ matrix.arch }}
           path: shot.png
           if-no-files-found: ignore
 
@@ -217,10 +222,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download Windows build
+      - name: Download Windows builds
         uses: actions/download-artifact@v4
         with:
-          name: Fall-windows-x64
+          pattern: Fall-windows-*
+          merge-multiple: true
 
       - name: Create or update release
         env:
@@ -230,7 +236,7 @@ jobs:
           flags=(--generate-notes)
           case "$TAG" in *-*) flags+=(--prerelease) ;; esac
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" Fall-windows-x64.zip --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload "$TAG" Fall-windows-x64.zip Fall-windows-x86.zip --clobber --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$TAG" Fall-windows-x64.zip --title "$TAG" "${flags[@]}" --repo "$GITHUB_REPOSITORY"
+            gh release create "$TAG" Fall-windows-x64.zip Fall-windows-x86.zip --title "$TAG" "${flags[@]}" --repo "$GITHUB_REPOSITORY"
           fi
