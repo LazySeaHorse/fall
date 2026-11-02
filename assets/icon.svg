@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bg1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#17171c"/>
+      <stop offset="1" stop-color="#0c0c10"/>
+    </linearGradient>
+    <linearGradient id="trailRight" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7ee0d2" stop-opacity="0"/>
+      <stop offset="0.6" stop-color="#7ee0d2" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#7ee0d2"/>
+    </linearGradient>
+    <linearGradient id="trailLeft" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#b9a5ff" stop-opacity="0"/>
+      <stop offset="0.6" stop-color="#b9a5ff" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#b9a5ff"/>
+    </linearGradient>
+    <linearGradient id="keys1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f5f5f7"/>
+      <stop offset="1" stop-color="#c9c9d2"/>
+    </linearGradient>
+    <radialGradient id="glowRight">
+      <stop offset="0" stop-color="#7ee0d2" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#7ee0d2" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowLeft">
+      <stop offset="0" stop-color="#b9a5ff" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#b9a5ff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- tile -->
+  <rect width="256" height="256" rx="56" fill="url(#bg1)"/>
+
+  <!-- falling note bars, fading in at the top -->
+  <rect x="72" y="40" width="44" height="132" rx="22" fill="url(#trailRight)"/>
+  <rect x="140" y="92" width="44" height="80" rx="22" fill="url(#trailLeft)"/>
+
+  <!-- sliver of keys -->
+  <rect x="40" y="184" width="176" height="36" rx="6" fill="url(#keys1)"/>
+  <g fill="#0c0c10">
+    <rect x="64.1" y="184" width="2" height="36"/>
+    <rect x="89.3" y="184" width="2" height="36"/>
+    <rect x="114.4" y="184" width="2" height="36"/>
+    <rect x="139.6" y="184" width="2" height="36"/>
+    <rect x="164.7" y="184" width="2" height="36"/>
+    <rect x="189.9" y="184" width="2" height="36"/>
+  </g>
+
+  <!-- impact glow -->
+  <ellipse cx="94" cy="184" rx="56" ry="16" fill="url(#glowRight)"/>
+  <ellipse cx="162" cy="184" rx="56" ry="16" fill="url(#glowLeft)"/>
+</svg>

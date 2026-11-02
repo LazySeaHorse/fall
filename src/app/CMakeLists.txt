@@ -2,6 +2,7 @@ juce_add_gui_app(Fall
     PRODUCT_NAME "Fall"
     COMPANY_NAME "Fall"
     BUNDLE_ID "app.fall.piano"
+    ICON_BIG "${CMAKE_SOURCE_DIR}/assets/icon_1024.png"
     VERSION ${PROJECT_VERSION})
 
 file(GLOB FALL_APP_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
