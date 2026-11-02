@@ -16,6 +16,7 @@ public:
     std::function<void (double t)> onAddMarker;
     std::function<void (int index, juce::Rectangle<int> screenBounds)> onMarkerClicked;
     std::function<void()> onClearLoop;
+    std::function<void (bool)> onProgressive;
 
     void setSongLength (double startTime, double endTime) { t0 = startTime; t1 = std::max (startTime + 0.1, endTime); }
     void setTime (double t) { now = t; repaint(); }
@@ -188,6 +189,7 @@ private:
         m.addItem ("Add marker at " + formatTime (t), [this, t] { if (onAddMarker) onAddMarker (t); });
         m.addSeparator();
         m.addItem ("Loop from here (8 s)", [this, t] { if (onLoopChanged) onLoopChanged (t, std::min (t1, t + 8.0)); });
+        m.addItem ("Speed up each pass", loop.enabled, loop.progressive, [this] { if (onProgressive) onProgressive (! loop.progressive); });
         m.addItem ("Clear loop", loop.enabled, false, [this] { if (onClearLoop) onClearLoop(); });
         m.showMenuAsync (juce::PopupMenu::Options().withMousePosition());
     }

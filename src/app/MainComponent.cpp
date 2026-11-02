@@ -120,6 +120,17 @@ MainComponent::MainComponent (const LaunchOptions& options) : opts (options), sc
     timeline.onSeek        = [this] (double t) { engine.withPlayer ([t] (Player& p) { p.seek (t); }); };
     timeline.onLoopChanged = [this] (double a, double b) { setLoopRegion (a, b); };
     timeline.onClearLoop   = [this] { clearLoop(); };
+    timeline.onProgressive = [this] (bool on) {
+        const double current = engine.snapshot().speed;
+        loop.progressive = on;
+        loop.startSpeed  = current < 0.95 ? current : 0.6;
+        loop.step        = 0.05;
+        loop.targetSpeed = std::max (1.0, current);
+        pushLoop();
+        toast.show (on ? "Each pass " + juce::String (juce::roundToInt (loop.step * 100)) + "% faster, up to "
+                             + juce::String (juce::roundToInt (loop.targetSpeed * 100)) + "%"
+                       : "Fixed speed loop", theme::loopTint);
+    };
     timeline.onAddMarker   = [this] (double t) { addMarker (t); };
     timeline.onMarkerClicked = [this] (int i, juce::Rectangle<int> r) { editMarker (i, r); };
 
@@ -625,10 +636,7 @@ void MainComponent::setSpeed (double s)
     engine.withPlayer ([s] (Player& p) { p.setSpeed (s); });
     speedControl.setSpeed (s);
     if (loop.progressive)
-    {
-        loop.startSpeed = s;
-        engine.withPlayer ([this] (Player& p) { auto l = loop; l.progressive = false; p.setLoop (l); p.setSpeed (loop.startSpeed); });
-    }
+        loop.startSpeed = s; // the ramp continues from wherever you set it
 }
 
 void MainComponent::setMode (Mode m)
