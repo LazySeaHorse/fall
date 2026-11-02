@@ -12,7 +12,8 @@ connection.
 - **Hearing your piano.** Fall knows which notes come next, so it only has to check whether they
   were played. That keeps it fast, at a few tens of milliseconds. It checks that what it hears lines
   up with the strings of those keys, like a tuner, so snaps, claps and typing don't count. It also
-  works out your piano's tuning by itself. The keys it hears show on screen as pink dots.
+  works out your piano's tuning by itself. The keys it hears show on screen as pink dots, and if
+  you play the right key in the wrong octave, Fall tells you.
 - **Calibration.** *Settings → Teach Fall my piano* has you play about 30 keys, so Fall learns how
   your piano sounds through your microphone.
 - **Jump keys.** Drop markers on the timeline (`M` or right-click) and bind each one to a piano

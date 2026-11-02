@@ -75,6 +75,18 @@ Details that matter:
   (versioned binary, `Calibration::toBinary/fromBinary`). Calibrated keys are scored with their
   measured partials (+-22 cents, weights from the real mic/room) and a 25% lower threshold;
   uncalibrated keys are bent towards the nearest calibrated neighbours (tuning, B, weights).
+* **Octave check.** The key an octave above (C7 for C6) has a partial wherever the expected key has
+  an even one, so it fits the expected key's model about as well as the key itself; before this
+  check a clean C7 satisfied an expected C6 almost every time (23 of 23 in the unit test). For
+  expected keys from C4 up, `oddShare()` measures the new power on the fitted partials 1..6 above
+  the local spectral floor and takes the share on the ODD ones (1, 3, 5), which only the expected key
+  produces: a real note puts 0.2..0.9 there, the octave above 0.00..0.08 (real piano, laptop mic).
+  Below `oddMin` (0.10) the key is rejected. Partials that another expected key also produces (an
+  octave or a fifth in the chord) are left out. Below C4 the check is off: the synthetic piano's
+  low partials 3 and 5 are too weak to judge. The display picker uses the same test before it
+  prefers the lower key of an octave pair, and shows a key one or two octaves above a not-yet-heard
+  expected key at a lower threshold (`octaveHintSel`), so the app can say "you played C7, the song
+  wants C6".
 * **Jump keys.** Late analysis window (the click is gone), +6 dB stricter prominence/newness, the
   key must be a pick of the explain-and-subtract pass, must not be explainable by a lower key
   (octave/twelfth...), rich keys (A0, B0) additionally need their *independent* partials
@@ -116,7 +128,8 @@ semitone, clean) 1-2%; 0.6 -> 95.9% / 5-5.5%; 0.9 -> 98.8% / 7%, but 56 prematur
   `fall_detect_eval --dir data/generated/medium --truth data/generated/midi [--quiet]` or
   `fall_detect_eval rec.wav played.mid [--offset s]` for real recordings (MIDI of what was played,
   or the CSV format `onset,pitch,duration,velocity`). Reports the learn-mode simulation, wrong-note
-  rejection (expected = real chord shifted by +-1, +2, +7 semitones), jump-key fires, display
+  rejection (expected = real chord shifted by +-1, +2, +7 semitones, or one/two octaves below
+  what sounds: the "played 8va / 15ma" columns), jump-key fires, display
   precision/recall/F1 (+-50 ms), per-octave breakdown, CPU per 10 ms block. `--csv f` dumps all
   reports, `--block 0` uses random block sizes, `--sens`, `--param k=v`, `--calibration f`,
   `--make-calibration out.cal` (builds a calibration from a recording in which every key is
@@ -196,8 +209,9 @@ Other measurements:
 
 * **Wrong notes that share partials** (fifth, octave, third) are accepted a lot, by design (false
   positives are allowed). With a dense, pedalled texture even +-1 semitone is accepted 6-8%.
-* **Octave below/above**: an expected key one octave above the played one is accepted (its whole
-  series is contained in the lower note's).
+* **Octave below**: an expected key one octave ABOVE the played one is accepted (its whole series
+  is contained in the lower note's). The opposite mistake (playing the octave above) is rejected
+  from C4 up, but still accepted ~15% of the time in the bass, where the check is off.
 * **A0/B0 jump keys** are barely audible on a laptop mic and every one of their partials coincides
   with an ordinary bass note of a chord; they fire rarely. C8 has one usable partial. Prefer
   calibrated jump keys and consider keys such as B0/C8 only if a miss is acceptable.
@@ -207,7 +221,10 @@ Other measurements:
   trigger false hits). Fine for learn mode (the song waits), not for free transcription.
 * A very soft repeat of a loud ringing note (more than ~6 dB below the ringing partials) is missed.
 * Hard level (SNR ~20 dB in reverberant room with strong compressor): 87% recall.
-* Not tested against a real microphone yet: the real thing may need different thresholds.
+* **First real recording** (grand piano, laptop mic, raw mode, River Flows in You): the misses and
+  false accepts were nearly all octave mistakes (the melody played one or two octaves above the
+  song); the true notes in it are accepted. `fall_detect_eval --replay rec.wav rec.csv` replays a
+  recording with the expected notes Fall had logged and prints what the detector reports now.
   *Settings -> Save what Fall heard* writes the last 90 s of microphone audio
   (`Documents/Fall recordings/fall-<date>.wav`) plus a CSV of what was expected and heard; replay
   the WAV with `fall_detect_eval` and sweep `--param`.
