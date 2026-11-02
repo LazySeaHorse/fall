@@ -45,6 +45,7 @@ struct KeyPartials
     float hi[kMaxPartials] {};
     float w[kMaxPartials] {};    // weight; sums to 1
     int   h[kMaxPartials] {};    // harmonic number
+    bool  measured = false;      // built from a calibration capture (sharper, so judged a bit more leniently)
     float chance = 0.0f;         // 1 / sqrt (effective number of partials): how easily noise alone fills the series
 };
 

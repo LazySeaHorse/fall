@@ -72,6 +72,8 @@ struct NoteDetector::Impl
         float displaySel = 0.82f;       // chance-corrected score a display pitch needs
         float stage1Bump = 0.0f, stage2Bump = 0.0f; // extra score required by the later (second-chance) evaluations
         float watchIndependent = 0.75f;  // score over the partials a lower note cannot produce (rich jump keys)
+        float watchPrefilter = 0.3f;    // stage-2 score a jump key needs for the late stage to run at all
+        float measuredScale = 0.75f;    // calibrated keys: threshold multiplier (their templates are sharper)
         float watchStrictDb = 6.0f;     // extra prominence/newness (dB) demanded for jump keys
         float contrastMin = -1.0f;      // expected key must beat the median of its non-expected neighbours by this much
         float weakOnsetPenalty = 0.3f; // extra score an onset of strength 1.0 (x threshold) must show
@@ -284,17 +286,17 @@ struct NoteDetector::Impl
     }
 
     // Name -> tuning field table (also used by the eval tool for sweeps).
-    static constexpr int kNumOverrides = 23;
+    static constexpr int kNumOverrides = 25;
     static const char* overrideName (int i)
     {
         static const char* names[kNumOverrides] = { "zOnset", "zComb", "promLo", "promHi", "newLo", "newHi", "expectedMin",
-                                                    "watchMin", "displayMin", "neighbourMargin", "watchContrast", "settleStrength", "expectedNewRelief", "weakOnsetPenalty", "contrastMin", "watchStrictDb", "chanceCoef", "watchSel", "subharmonicMin", "displaySel", "stage1Bump", "stage2Bump", "watchIndependent" };
+                                                    "watchMin", "displayMin", "neighbourMargin", "watchContrast", "settleStrength", "expectedNewRelief", "weakOnsetPenalty", "contrastMin", "watchStrictDb", "chanceCoef", "watchSel", "subharmonicMin", "displaySel", "stage1Bump", "stage2Bump", "watchIndependent", "watchPrefilter", "measuredScale" };
         return names[i];
     }
     float* overridePtr (int i)
     {
         float* p[kNumOverrides] = { &tune.zOnset, &tune.zComb, &tune.promLo, &tune.promHi, &tune.newLo, &tune.newHi, &tune.expectedMin,
-                                    &tune.watchMin, &tune.displayMin, &tune.neighbourMargin, &tune.watchContrast, &tune.settleStrength, &tune.expectedNewRelief, &tune.weakOnsetPenalty, &tune.contrastMin, &tune.watchStrictDb, &tune.chanceCoef, &tune.watchSel, &tune.subharmonicMin, &tune.displaySel, &tune.stage1Bump, &tune.stage2Bump, &tune.watchIndependent };
+                                    &tune.watchMin, &tune.displayMin, &tune.neighbourMargin, &tune.watchContrast, &tune.settleStrength, &tune.expectedNewRelief, &tune.weakOnsetPenalty, &tune.contrastMin, &tune.watchStrictDb, &tune.chanceCoef, &tune.watchSel, &tune.subharmonicMin, &tune.displaySel, &tune.stage1Bump, &tune.stage2Bump, &tune.watchIndependent, &tune.watchPrefilter, &tune.measuredScale };
         return p[i];
     }
     bool  overrideSet[kNumOverrides] {};
@@ -823,12 +825,22 @@ struct NoteDetector::Impl
                    #ifdef FALL_DETECT_TRACE
                     std::fprintf (stderr, "[trace] onset %.3f stage %d expected %d F=%.2f null=%.2f\n", (double) p.pos / fs, stage, pitch, (double) f, (double) nullLevel (pitch, evidExp.data(), b));
                    #endif
-                    if (f >= needed && f - nullLevel (pitch, evidExp.data(), b) >= tune.contrastMin && ! betterNeighbour (pitch, f, b))
+                    if (f >= needed * (models[(size_t) keyIndex (pitch)].measured ? tune.measuredScale : 1.0f) && f - nullLevel (pitch, evidExp.data(), b) >= tune.contrastMin && ! betterNeighbour (pitch, f, b))
                     {
                         newExp.set ((size_t) pitch);
                         p.hitExp.set ((size_t) pitch);
                     }
                 }
+            }
+
+            // the expensive late jump-key stage only runs when a jump key looks plausible so far
+            if (stage == 2 && p.lastStage == 3 && ! p.capture)
+            {
+                bool plausible = false;
+                for (int w = kLowestPianoKey; w <= kHighestPianoKey && ! plausible; ++w)
+                    plausible = watch.test ((size_t) w) && score (models[(size_t) keyIndex (w)], evid.data(), b) >= tune.watchPrefilter;
+                if (! plausible)
+                    p.lastStage = 2;
             }
 
             if (stage == 2 || (clamped && stage >= 1))

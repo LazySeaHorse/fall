@@ -58,6 +58,7 @@ namespace
     {
         const double f0 = pitchToHz (pitch, tuneCents);
         out.n = 0;
+        out.measured = false;
         for (int h = 1; h <= kMaxPartials * 2 && out.n < kMaxPartials; ++h)
         {
             const double f = partialHz (f0, B, h);
@@ -83,6 +84,7 @@ namespace
     {
         (void) pitch;
         out.n = 0;
+        out.measured = true;
         for (int j = 0; j < k.n && out.n < kMaxPartials; ++j)
         {
             if (k.w[j] <= 0.0f)
