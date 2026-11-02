@@ -40,7 +40,6 @@ LaunchOptions LaunchOptions::parse (const juce::StringArray& rawArgs)
         else if (a == "--auto-learn") o.autoLearn = true;
         else if (a == "--settings")   o.openSettings = true;
         else if (a == "--calibrate")  o.calibrate = true;
-        else if (a == "--light")      o.light = true;
         else if (a == "--mode")       o.mode = next (i);
         else if (a == "--hands")      o.hands = next (i);
         else if (a == "--loop")
@@ -82,7 +81,8 @@ MainComponent::MainComponent (const LaunchOptions& options) : opts (options), sc
 
     for (auto* c : std::initializer_list<juce::Component*> { &stage, &timeline, &openButton, &restartButton, &playButton,
                                                              &speedControl, &modeSeg, &handsSeg, &loopButton, &micButton,
-                                                             &instrumentButton, &settingsButton })
+                                                             &instrumentButton, &settingsButton, &minimiseButton,
+                                                             &maximiseButton, &closeButton })
         addAndMakeVisible (c);
     addChildComponent (calibration);
     addChildComponent (settingsPanel);
@@ -93,6 +93,9 @@ MainComponent::MainComponent (const LaunchOptions& options) : opts (options), sc
         c->setWantsKeyboardFocus (false);
 
     openButton.onClick       = [this] { openFileChooser(); };
+    minimiseButton.onClick   = [this] { if (auto* w = window()) w->setMinimised (true); };
+    maximiseButton.onClick   = [this] { if (auto* w = window()) w->setFullScreen (! w->isFullScreen()); };
+    closeButton.onClick      = [] { juce::JUCEApplication::getInstance()->systemRequestedQuit(); };
     restartButton.onClick    = [this] { engine.withPlayer ([] (Player& p) { p.seek (p.getLoop().enabled ? p.getLoop().a : std::max (Player::kMinTime, (p.getSong() ? p.getSong()->firstNoteTime() : 0.0) - 1.5)); }); };
     playButton.onClick       = [this] { togglePlay(); };
     loopButton.onClick       = [this] { toggleLoop(); };
@@ -143,20 +146,34 @@ MainComponent::MainComponent (const LaunchOptions& options) : opts (options), sc
     settingsPanel.onClose = [this] { showSettings (false); };
     settingsPanel.onInstrumentChosen = [this] (int i) { chooseInstrument (i); };
     settingsPanel.onRescan = [this] {
-        plugins.scan ([this] { refreshInstrumentList(); toast.show (juce::String (instruments.size()) + " instruments found"); saveSettings(); });
+        plugins.scan ([this] {
+            refreshInstrumentList();
+            const auto wrong = plugins.getWrongArchitecture();
+            toast.show (juce::String (instruments.size()) + " instruments found"
+                        + (wrong.isEmpty() ? juce::String() : kDot + juce::String (wrong.size()) + " need the other Fall build"));
+            saveSettings();
+        });
         refreshInstrumentList();
     };
     settingsPanel.onAddPluginFile = [this] {
-        auto chooser = std::make_shared<juce::FileChooser> ("Choose a VST3 instrument",
-            juce::File ("C:\\Program Files\\Common Files\\VST3"), "*.vst3");
+        auto chooser = std::make_shared<juce::FileChooser> ("Choose an instrument plugin (.vst3 or .dll)",
+            juce::File::getSpecialLocation (juce::File::globalApplicationsDirectory), "*.vst3;*.dll");
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles
                                   | juce::FileBrowserComponent::canSelectDirectories,
             [this, chooser] (const juce::FileChooser& fc) {
                 if (fc.getResult() == juce::File()) return;
-                const auto found = plugins.addFile (fc.getResult());
+                const auto result = plugins.addFile (fc.getResult());
                 refreshInstrumentList();
-                toast.show (found.isEmpty() ? "No instrument in that file" : "Added " + found.getFirst().name);
                 saveSettings();
+                if (result.instruments.isEmpty())
+                {
+                    toast.show (result.problem, juce::Colour (0xffff453a));
+                    return;
+                }
+                // Picking a file by hand means "use this one".
+                for (int i = 0; i < instruments.size(); ++i)
+                    if (instruments[i].isDuplicateOf (result.instruments.getFirst()))
+                        chooseInstrument (i + 1);
             });
     };
     settingsPanel.onShowInstrumentWindow = [this] { showInstrumentWindow(); };
@@ -213,8 +230,9 @@ MainComponent::MainComponent (const LaunchOptions& options) : opts (options), sc
             if (d.loadFromXml (*xml))
                 loadInstrument (d, settings.get().getValue ("instrumentState"));
         }
-        if (instruments.isEmpty())
-            plugins.scan ([this] { refreshInstrumentList(); saveSettings(); });
+        // Always rescan in the background: already-known files are skipped, so it's quick,
+        // and newly installed instruments just show up.
+        plugins.scan ([this] { refreshInstrumentList(); saveSettings(); });
     }
 
     if (opts.midi.existsAsFile())
@@ -341,6 +359,7 @@ void MainComponent::frame()
     playButton.setPlaying (s.playing);
     speedControl.setSpeed (s.speed);
     micButton.setToggled (micOn && engine.hasInput());
+    if (auto* w = window()) maximiseButton.setMaximised (w->isFullScreen());
 
     // Settings sheet slides over the stage.
     settingsSlide.target = settingsOpen ? 1.0f : 0.0f;
@@ -492,7 +511,15 @@ void MainComponent::resized()
     openButton.setBounds (juce::Rectangle<int> (36, 36).withPosition (bar.getX(), cy - 18));
 
     auto right = bar;
-    const bool narrow = getWidth() < 1100;
+    const bool narrow = getWidth() < 1180;
+    // Caption buttons hug the window's top-right corner, full bar height, like Windows 11.
+    {
+        auto caption = getLocalBounds().removeFromTop (kTopBarH).removeFromRight (46 * 3);
+        closeButton.setBounds (caption.removeFromRight (46));
+        maximiseButton.setBounds (caption.removeFromRight (46));
+        minimiseButton.setBounds (caption.removeFromRight (46));
+        right.removeFromRight (46 * 3 - 12 + 8);
+    }
     settingsButton.setBounds (right.removeFromRight (36).withSizeKeepingCentre (36, 36));
     right.removeFromRight (4);
     instrumentButton.setBounds (right.removeFromRight (36).withSizeKeepingCentre (36, 36));
@@ -519,8 +546,28 @@ void MainComponent::resized()
 
 void MainComponent::mouseDown (const juce::MouseEvent& e)
 {
+    // The top bar is the window's title bar: drag it to move the window.
+    draggingWindow = e.y < kTopBarH && window() != nullptr && ! window()->isFullScreen();
+    if (draggingWindow)
+    {
+        windowDragger.startDraggingComponent (window(), e.getEventRelativeTo (window()));
+        return;
+    }
+
     if (settingsOpen && ! settingsPanel.getBounds().contains (e.getPosition()))
         showSettings (false);
+}
+
+void MainComponent::mouseDrag (const juce::MouseEvent& e)
+{
+    if (draggingWindow)
+        windowDragger.dragComponent (window(), e.getEventRelativeTo (window()), nullptr);
+}
+
+void MainComponent::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    if (e.y < kTopBarH)
+        if (auto* w = window()) w->setFullScreen (! w->isFullScreen());
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -820,7 +867,11 @@ void MainComponent::refreshInstrumentList()
     instruments = plugins.getInstruments();
     juce::StringArray names;
     for (const auto& d : instruments) names.add (d.name + (d.manufacturerName.isNotEmpty() ? "  (" + d.manufacturerName + ")" : juce::String()));
-    settingsPanel.setInstruments (names, instrumentIndex, plugins.isScanning());
+    juce::String note;
+    if (const auto wrong = plugins.getWrongArchitecture(); ! wrong.isEmpty())
+        note = "Found but not loadable in this " + juce::String (PluginManager::processBits()) + "-bit build: "
+               + wrong.joinIntoString (", ") + ". Use Fall-windows-" + (PluginManager::processBits() == 64 ? "x86" : "x64") + " for those.";
+    settingsPanel.setInstruments (names, instrumentIndex, plugins.isScanning(), note);
 }
 
 void MainComponent::chooseInstrument (int index)

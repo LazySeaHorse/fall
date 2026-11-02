@@ -30,7 +30,6 @@ struct LaunchOptions
     double       loopA = -1.0, loopB = -1.0;
     std::vector<Marker> markers;
     int          width = 1280, height = 800;
-    bool         light = false;
 
     bool scripted() const { return screenshot.isNotEmpty() || framesDir != juce::File(); }
     static LaunchOptions parse (const juce::StringArray& args);
@@ -49,6 +48,8 @@ public:
     void resized() override;
     bool keyPressed (const juce::KeyPress&) override;
     void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
 
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int, int) override;
@@ -106,10 +107,7 @@ private:
     // Must run before any widget is constructed: several capture theme colours in their constructors.
     struct ThemeInit
     {
-        explicit ThemeInit (const LaunchOptions& o)
-        {
-            theme::setDark (o.light ? false : (o.scripted() ? true : juce::Desktop::getInstance().isDarkModeActive()));
-        }
+        explicit ThemeInit (const LaunchOptions&) { theme::init(); }
     } themeInit { opts };
 
     AppSettings settings;
@@ -139,6 +137,12 @@ private:
     Segmented modeSeg { { "Free play", "Learn" } };
     Segmented handsSeg { { "Left", "Both", "Right" } };
     SpeedControl speedControl;
+    WindowButton minimiseButton { WindowButton::Kind::Minimise };
+    WindowButton maximiseButton { WindowButton::Kind::Maximise };
+    WindowButton closeButton { WindowButton::Kind::Close };
+    juce::ComponentDragger windowDragger;
+    bool draggingWindow = false;
+    juce::ResizableWindow* window() const { return dynamic_cast<juce::ResizableWindow*> (getTopLevelComponent()); }
     juce::TooltipWindow tooltips { this, 700 };
 
     juce::VBlankAttachment vblank;

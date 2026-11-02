@@ -201,6 +201,59 @@ private:
     juce::String badge;
 };
 
+// Minimise / maximise / close, drawn to match Windows 11's caption buttons.
+class WindowButton : public Pressable
+{
+public:
+    enum class Kind { Minimise, Maximise, Close };
+    explicit WindowButton (Kind k) : kind (k)
+    {
+        setTooltip (k == Kind::Close ? "Close" : k == Kind::Minimise ? "Minimise" : "Maximise");
+    }
+
+    void setMaximised (bool m) { if (maximised != m) { maximised = m; repaint(); } }
+
+    void paint (juce::Graphics& g) override
+    {
+        const auto& pal = theme::palette();
+        auto b = getLocalBounds().toFloat();
+        const auto hoverBg = kind == Kind::Close ? juce::Colour (0xffc42b1c) : pal.raisedHover;
+        g.setColour (hoverBg.withAlpha (hover.value * (1.0f - 0.25f * press.value)));
+        g.fillRect (b);
+
+        const auto c = b.getCentre();
+        const float s = 5.0f;
+        g.setColour (pal.textDim.interpolatedWith (kind == Kind::Close ? juce::Colours::white : pal.text, hover.value));
+        switch (kind)
+        {
+            case Kind::Minimise:
+                g.fillRect (c.x - s, c.y, s * 2.0f, 1.0f);
+                break;
+            case Kind::Maximise:
+                if (maximised)
+                {
+                    g.drawRoundedRectangle (c.x - s, c.y - s + 2.0f, s * 2.0f - 2.0f, s * 2.0f - 2.0f, 1.5f, 1.0f);
+                    juce::Path back;
+                    back.startNewSubPath (c.x - s + 2.0f, c.y - s);
+                    back.lineTo (c.x + s, c.y - s);
+                    back.lineTo (c.x + s, c.y + s - 2.0f);
+                    g.strokePath (back, juce::PathStrokeType (1.0f));
+                }
+                else
+                    g.drawRoundedRectangle (c.x - s, c.y - s, s * 2.0f, s * 2.0f, 1.5f, 1.0f);
+                break;
+            case Kind::Close:
+                g.drawLine (c.x - s, c.y - s, c.x + s, c.y + s, 1.1f);
+                g.drawLine (c.x - s, c.y + s, c.x + s, c.y - s, 1.1f);
+                break;
+        }
+    }
+
+private:
+    Kind kind;
+    bool maximised = false;
+};
+
 // Play/pause with the icon morphing between the two shapes.
 class PlayButton : public Pressable
 {
