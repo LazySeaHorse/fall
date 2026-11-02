@@ -15,8 +15,8 @@ connection.
 - **Calibration.** *Settings → Teach Fall my piano* has you play about 30 keys, so Fall learns how
   your piano sounds through your microphone.
 - **Jump keys.** Drop markers on the timeline (`M` or right-click) and bind each one to a piano
-  key. Playing that key jumps the song back to the marker. Fall suggests the far-left keys (A0,
-  B0, C1…), which songs rarely use.
+  key. Playing that key jumps the song back to the marker. Fall suggests the top keys (C8,
+  B7, A7…), which songs rarely use and which the microphone hears most clearly.
 - **Loops.** Shift-drag on the timeline or press `L`. Right-click the timeline for *Speed up each
   pass*.
 - **Hands.** Choose your part (Left, Both or Right). The other hand is dimmed and keeps playing in
