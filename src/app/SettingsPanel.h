@@ -12,8 +12,9 @@ class SettingsPanel : public juce::Component, private Animated
 public:
     // ---- wired by MainComponent ----
     std::function<void (int index)> onInstrumentChosen; // 0 = built-in, 1.. = instruments list
-    std::function<void()> onRescan, onAddPluginFile, onShowInstrumentWindow, onAudioSettings, onCalibrate, onClose;
-    std::function<void (bool)> onMicEnabled, onShowNames, onPlayMyPart;
+    std::function<void()> onRescan, onAddPluginFile, onShowInstrumentWindow, onAudioSettings, onCalibrate, onClose, onSaveRecording;
+    std::function<void (bool)> onMicEnabled, onShowNames, onPlayMyPart, onRawMic;
+    std::function<juce::String()> getTuningText;
     std::function<void (double)> onSensitivity, onEarlyWindow, onLookahead, onVolume, onJumpLeadIn;
     std::function<void (int)> onSplitPitch;
     std::function<float()> getInputLevelDb;
@@ -52,9 +53,21 @@ public:
         addRow (p, "Sensitivity", sensitivity);
         setupSlider (sensitivity, 0.0, 1.0, 0.01, [this] (double v) { if (onSensitivity) onSensitivity (v); });
         hint (p, "Higher catches quiet notes but may accept a wrong one now and then.");
+        addRow (p, "Piano tuning", tuning);
+        tuning.setFont (theme::font (14.0f));
+        tuning.setColour (juce::Label::textColourId, theme::palette().textDim);
+        hint (p, "Measured from what you play, like a tuner. Fall adjusts to it by itself.");
+       #if JUCE_WINDOWS
+        addRow (p, "Raw microphone", rawMic);
+        rawMic.onToggle = [this] (bool b) { if (onRawMic) onRawMic (b); };
+        hint (p, "Skips Windows' voice effects, which treat piano tones as noise. Turn off only if the input level stays empty.");
+       #endif
         addButtons (p, { { &calibrate, "Teach Fall my piano..." } });
         calibrate.onClick = [this] { if (onCalibrate) onCalibrate(); };
         hint (p, calibrationHint);
+        addButtons (p, { { &saveRecording, "Save what Fall heard" } });
+        saveRecording.onClick = [this] { if (onSaveRecording) onSaveRecording(); };
+        hint (p, "Saves the last 90 seconds from the microphone, with what Fall expected and heard, for tracking down missed notes.");
 
         header (p, "Learn mode");
         addRow (p, "Early tolerance", earlyWindow);
@@ -113,9 +126,15 @@ public:
                                   juce::dontSendNotification);
     }
 
+    void setRawMic (bool b) { rawMic.setToggled (b); }
+
     void tick (float) override
     {
-        if (isShowing()) meter.repaint();
+        if (! isShowing())
+            return;
+        meter.repaint();
+        if (getTuningText && ++tuningFrames % 15 == 0)
+            tuning.setText (getTuningText(), juce::dontSendNotification);
     }
 
     void paint (juce::Graphics& g) override
@@ -254,9 +273,11 @@ private:
     bool updating = false;
 
     juce::ComboBox instrument;
-    juce::TextButton rescan, addFile, showWindow, audio, calibrate;
+    juce::TextButton rescan, addFile, showWindow, audio, calibrate, saveRecording;
+    juce::Label tuning;
+    int tuningFrames = 0;
     juce::Slider volume, sensitivity, earlyWindow, lookahead, jumpLeadIn, splitPitch;
-    Switch playMyPart, micEnabled, showNames;
+    Switch playMyPart, micEnabled, showNames, rawMic;
     Meter meter;
     juce::Label* calibrationHint = nullptr;
     juce::Label* instrumentHint = nullptr;

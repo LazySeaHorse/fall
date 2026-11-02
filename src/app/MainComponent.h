@@ -157,7 +157,7 @@ private:
 
     // preferences
     int    handsSegment = 1;
-    bool   playMyPart = true, showNames = true, micOn = true;
+    bool   playMyPart = true, showNames = true, micOn = true, rawMic = true;
     double volume = 1.0, sensitivity = 0.6, earlyWindow = 0.25, jumpLeadIn = 1.0, lookahead = 3.2;
     int    splitPitch = 60;
 

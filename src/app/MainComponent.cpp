@@ -206,6 +206,45 @@ MainComponent::MainComponent (const LaunchOptions& options) : opts (options), sc
         saveSettings();
     };
     settingsPanel.getInputLevelDb = [this] { return engine.getInputLevelDb(); };
+    settingsPanel.onRawMic = [this] (bool b) { rawMic = b; engine.setRawMicrophone (b); saveSettings(); };
+    settingsPanel.getTuningText = [this]
+    {
+        bool sure = false;
+        const float c = engine.getTuningCents (sure);
+        if (! sure)
+            return juce::String ("listening...");
+        const int r = juce::roundToInt (c);
+        if (std::abs (r) <= 2)
+            return juce::String ("in tune with A440");
+        return juce::String (std::abs (r)) + " cents " + (r < 0 ? "flat" : "sharp");
+    };
+    settingsPanel.onSaveRecording = [this]
+    {
+        bool sure = false;
+        const float cents = engine.getTuningCents (sure);
+        juce::String notes;
+        notes << "Fall " << JUCE_APPLICATION_VERSION_STRING << "\n"
+              << "sample rate " << engine.getSampleRate() << " Hz\n"
+              << "sensitivity " << sensitivity << "\n"
+              << "raw microphone " << (rawMic ? "on" : "off") << "\n"
+              << "tuning " << (sure ? juce::String (cents, 1) + " cents" : juce::String ("unknown")) << "\n"
+              << "calibrated keys " << calib.numKeys() << "\n";
+        if (auto* dev = engine.getDeviceManager().getCurrentAudioDevice())
+            notes << "device " << dev->getTypeName() << " / " << dev->getName() << "\n";
+        if (song != nullptr)
+            notes << "song " << songFile.getFileName() << "\n";
+        juce::String error;
+        const auto folder = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Fall recordings");
+        const auto wav = engine.saveRecording (folder, notes, error);
+        if (wav == juce::File())
+            toast.show (error, juce::Colour (0xffff453a));
+        else
+        {
+            toast.show ("Saved " + wav.getFileName() + " in Documents/Fall recordings", theme::good);
+            if (! scripted)
+                wav.revealToUser();
+        }
+    };
     settingsPanel.bindMeter();
 
     calibration.onSkip = [this] { nextCalibrationKey (false); };
@@ -1020,6 +1059,7 @@ void MainComponent::restoreSettings()
         playMyPart   = s.getBoolValue ("playMyPart", true);
         showNames    = s.getBoolValue ("showNames", true);
         micOn        = s.getBoolValue ("micEnabled", true);
+        rawMic       = s.getBoolValue ("rawMic", true);
         volume       = s.getDoubleValue ("volume", 1.0);
         sensitivity  = s.getDoubleValue ("sensitivity", 0.6);
         earlyWindow  = s.getDoubleValue ("earlyWindow", 0.25);
@@ -1039,6 +1079,8 @@ void MainComponent::restoreSettings()
     stage.setShowNoteNames (showNames);
     stage.setLookahead (lookahead);
     engine.setMicEnabled (micOn);
+    engine.setRawMicrophone (rawMic);
+    settingsPanel.setRawMic (rawMic);
     engine.setMasterGain ((float) volume);
     engine.setSensitivity ((float) sensitivity);
     micButton.setToggled (micOn);
@@ -1054,6 +1096,7 @@ void MainComponent::saveSettings()
     s.setValue ("playMyPart", playMyPart);
     s.setValue ("showNames", showNames);
     s.setValue ("micEnabled", micOn);
+    s.setValue ("rawMic", rawMic);
     s.setValue ("volume", volume);
     s.setValue ("sensitivity", sensitivity);
     s.setValue ("earlyWindow", earlyWindow);
