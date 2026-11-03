@@ -135,9 +135,9 @@ void AudioEngine::processBlock (const float* const* inputs, int numIn, float* co
                 pushHeard (e);
                 recorder.logHeard (o.samplePosition, e.pitches, e.accepted, e.latencyMs);
             }
-            if (player.getGroupsCompleted() != expectedGroups || player.nextGroupTime() != expectedGate)
+            if (player.getGroupsCompleted() + player.getGroupsSkipped() != expectedGroups || player.nextGroupTime() != expectedGate)
             {
-                expectedGroups = player.getGroupsCompleted();
+                expectedGroups = player.getGroupsCompleted() + player.getGroupsSkipped();
                 expectedGate = player.nextGroupTime();
                 const PitchSet exp = player.expectedPitches();
                 detector.setExpected (exp);
