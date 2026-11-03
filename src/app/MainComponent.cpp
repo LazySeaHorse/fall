@@ -103,7 +103,7 @@ MainComponent::MainComponent (const LaunchOptions& options) : opts (options), sc
         micOn = ! micOn;
         engine.setMicEnabled (micOn);
         micButton.setToggled (micOn);
-        settingsPanel.setValues (volume, playMyPart, micOn, sensitivity, earlyWindow, jumpLeadIn, splitPitch, showNames, lookahead);
+        settingsPanel.setValues (volume, playMyPart, micOn, sensitivity, earlyWindow, jumpLeadIn, splitPitch, showNames, lookahead, forgiving);
         toast.show (micOn ? "Listening to your piano" : "Not listening", micOn ? theme::heard : juce::Colour());
         saveSettings();
     };
@@ -180,6 +180,7 @@ MainComponent::MainComponent (const LaunchOptions& options) : opts (options), sc
     settingsPanel.onShowNames = [this] (bool b) { showNames = b; stage.setShowNoteNames (b); saveSettings(); };
     settingsPanel.onPlayMyPart = [this] (bool b) { playMyPart = b; applyHands(); saveSettings(); };
     settingsPanel.onSensitivity = [this] (double v) { sensitivity = v; engine.setSensitivity ((float) v); saveSettings(); };
+    settingsPanel.onForgiving = [this] (bool b) { forgiving = b; engine.withPlayer ([b] (Player& p) { p.setForgiving (b); }); saveSettings(); };
     settingsPanel.onEarlyWindow = [this] (double v) { earlyWindow = v; engine.withPlayer ([v] (Player& p) { p.setEarlyWindow (v); }); saveSettings(); };
     settingsPanel.onJumpLeadIn = [this] (double v) { jumpLeadIn = v; engine.withPlayer ([v] (Player& p) { p.setJumpLeadIn (v); }); saveSettings(); };
     settingsPanel.onLookahead = [this] (double v) { lookahead = v; stage.setLookahead (v); saveSettings(); };
@@ -998,7 +999,7 @@ void MainComponent::showSettings (bool show)
     if (show)
     {
         refreshInstrumentList();
-        settingsPanel.setValues (volume, playMyPart, micOn, sensitivity, earlyWindow, jumpLeadIn, splitPitch, showNames, lookahead);
+        settingsPanel.setValues (volume, playMyPart, micOn, sensitivity, earlyWindow, jumpLeadIn, splitPitch, showNames, lookahead, forgiving);
         settingsPanel.setVisible (true);
         settingsPanel.toFront (false);
         toast.toFront (false);
@@ -1023,6 +1024,7 @@ void MainComponent::restoreSettings()
         jumpLeadIn   = s.getDoubleValue ("jumpLeadIn", 1.0);
         lookahead    = s.getDoubleValue ("lookahead", 3.2);
         splitPitch   = s.getIntValue ("splitPitch", 60);
+        forgiving    = s.getBoolValue ("forgiving", false);
         modeSeg.setSelected (s.getIntValue ("mode", 0), false);
         engine.withPlayer ([sp = s.getDoubleValue ("speed", 1.0)] (Player& p) { p.setSpeed (sp); });
 
@@ -1035,6 +1037,7 @@ void MainComponent::restoreSettings()
     engine.setMicEnabled (micOn);
     engine.setRawMicrophone (rawMic);
     settingsPanel.setRawMic (rawMic);
+    engine.withPlayer ([this] (Player& p) { p.setForgiving (forgiving); });
     engine.setMasterGain ((float) volume);
     engine.setSensitivity ((float) sensitivity);
     micButton.setToggled (micOn);
@@ -1057,6 +1060,7 @@ void MainComponent::saveSettings()
     s.setValue ("jumpLeadIn", jumpLeadIn);
     s.setValue ("lookahead", lookahead);
     s.setValue ("splitPitch", splitPitch);
+    s.setValue ("forgiving", forgiving);
     s.setValue ("mode", modeSeg.getSelected());
     s.setValue ("speed", engine.snapshot().speed);
     if (auto xml = plugins.saveList()) s.setValue ("pluginList", xml.get());

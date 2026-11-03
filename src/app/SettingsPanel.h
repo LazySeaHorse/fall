@@ -13,7 +13,7 @@ public:
     // ---- wired by MainComponent ----
     std::function<void (int index)> onInstrumentChosen; // 0 = built-in, 1.. = instruments list
     std::function<void()> onRescan, onAddPluginFile, onShowInstrumentWindow, onAudioSettings, onClose, onSaveRecording;
-    std::function<void (bool)> onMicEnabled, onShowNames, onPlayMyPart, onRawMic;
+    std::function<void (bool)> onMicEnabled, onShowNames, onPlayMyPart, onRawMic, onForgiving;
     std::function<juce::String()> getTuningText;
     std::function<void (double)> onSensitivity, onEarlyWindow, onLookahead, onVolume, onJumpLeadIn;
     std::function<void (int)> onSplitPitch;
@@ -67,6 +67,9 @@ public:
         hint (p, "Saves the last 90 seconds from the microphone, with what Fall expected and heard, for tracking down missed notes.");
 
         header (p, "Learn mode");
+        addRow (p, "Keep going if mostly right", forgiving);
+        forgiving.onToggle = [this] (bool b) { if (onForgiving) onForgiving (b); };
+        hint (p, "Skips a chord you haven't played after half a second, if you got 8 of the last 10. Never two in a row. Off: wait for every note.");
         addRow (p, "Early tolerance", earlyWindow);
         setupSlider (earlyWindow, 0.0, 0.6, 0.01, [this] (double v) { if (onEarlyWindow) onEarlyWindow (v); });
         earlyWindow.textFromValueFunction = [] (double v) { return juce::String (juce::roundToInt (v * 1000)) + " ms"; };
@@ -103,7 +106,7 @@ public:
         updating = false;
     }
 
-    void setValues (double vol, bool playMine, bool mic, double sens, double early, double lead, int split, bool names, double look)
+    void setValues (double vol, bool playMine, bool mic, double sens, double early, double lead, int split, bool names, double look, bool forgive)
     {
         volume.setValue (vol, juce::dontSendNotification);
         playMyPart.setToggled (playMine);
@@ -114,6 +117,7 @@ public:
         splitPitch.setValue (split, juce::dontSendNotification);
         showNames.setToggled (names);
         lookahead.setValue (look, juce::dontSendNotification);
+        forgiving.setToggled (forgive);
     }
 
     void setRawMic (bool b) { rawMic.setToggled (b); }
@@ -246,8 +250,8 @@ private:
             }
             else
             {
-                it.label->setBounds (20, y, 150, it.height);
                 const bool isSwitch = dynamic_cast<Switch*> (it.control) != nullptr;
+                it.label->setBounds (20, y, isSwitch ? w - 90 : 150, it.height); // a switch leaves room for a long label
                 it.control->setBounds (isSwitch ? w - 64 : 170, y + 6, isSwitch ? 44 : w - 190, it.height - 12);
             }
             y += it.height;
@@ -267,7 +271,7 @@ private:
     juce::Label tuning;
     int tuningFrames = 0;
     juce::Slider volume, sensitivity, earlyWindow, lookahead, jumpLeadIn, splitPitch;
-    Switch playMyPart, micEnabled, showNames, rawMic;
+    Switch playMyPart, micEnabled, showNames, rawMic, forgiving;
     Meter meter;
     juce::Label* instrumentHint = nullptr;
 
