@@ -130,14 +130,18 @@ void AudioEngine::processBlock (const float* const* inputs, int numIn, float* co
                 // The detector hears one note at a time, so one note of a chord completes the chord.
                 if (e.accepted.any())
                     e.marker = player.notePlayed (o.expectedHits.any() ? (player.expectedPitches() | o.watchHits) : o.watchHits);
+                // Any key but a jump key: lets the song run on (after notePlayed, so a correct note still
+                // completes its chord before heardSomething could pass it).
+                if ((e.pitches & ~player.jumpKeys()).any())
+                    player.heardSomething();
                 e.wallMs    = juce::Time::getMillisecondCounterHiRes();
                 e.latencyMs = (float) (1000.0 * (double) (o.reportedAt - o.samplePosition) / sampleRate);
                 pushHeard (e);
                 recorder.logHeard (o.samplePosition, e.pitches, e.accepted, e.latencyMs);
             }
-            if (player.getGroupsCompleted() + player.getGroupsSkipped() != expectedGroups || player.nextGroupTime() != expectedGate)
+            if (player.getGroupsCompleted() + player.getGroupsSkipped() + player.getGroupsPassed() != expectedGroups || player.nextGroupTime() != expectedGate)
             {
-                expectedGroups = player.getGroupsCompleted() + player.getGroupsSkipped();
+                expectedGroups = player.getGroupsCompleted() + player.getGroupsSkipped() + player.getGroupsPassed();
                 expectedGate = player.nextGroupTime();
                 const PitchSet exp = player.expectedPitches();
                 detector.setExpected (exp);
