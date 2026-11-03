@@ -39,7 +39,6 @@ LaunchOptions LaunchOptions::parse (const juce::StringArray& rawArgs)
         else if (a == "--no-audio")   o.noAudio = true;
         else if (a == "--auto-learn") o.autoLearn = true;
         else if (a == "--settings")   o.openSettings = true;
-        else if (a == "--calibrate")  o.calibrate = true;
         else if (a == "--mode")       o.mode = next (i);
         else if (a == "--hands")      o.hands = next (i);
         else if (a == "--loop")
@@ -84,7 +83,6 @@ MainComponent::MainComponent (const LaunchOptions& options) : opts (options), sc
                                                              &instrumentButton, &settingsButton, &minimiseButton,
                                                              &maximiseButton, &closeButton })
         addAndMakeVisible (c);
-    addChildComponent (calibration);
     addChildComponent (settingsPanel);
     addChildComponent (toast);
 
@@ -178,7 +176,6 @@ MainComponent::MainComponent (const LaunchOptions& options) : opts (options), sc
     };
     settingsPanel.onShowInstrumentWindow = [this] { showInstrumentWindow(); };
     settingsPanel.onAudioSettings = [this] { openAudioSettings(); };
-    settingsPanel.onCalibrate = [this] { showSettings (false); startCalibration(); };
     settingsPanel.onMicEnabled = [this] (bool b) { micOn = b; engine.setMicEnabled (b); micButton.setToggled (b); saveSettings(); };
     settingsPanel.onShowNames = [this] (bool b) { showNames = b; stage.setShowNoteNames (b); saveSettings(); };
     settingsPanel.onPlayMyPart = [this] (bool b) { playMyPart = b; applyHands(); saveSettings(); };
@@ -227,8 +224,7 @@ MainComponent::MainComponent (const LaunchOptions& options) : opts (options), sc
               << "sample rate " << engine.getSampleRate() << " Hz\n"
               << "sensitivity " << sensitivity << "\n"
               << "raw microphone " << (rawMic ? "on" : "off") << "\n"
-              << "tuning " << (sure ? juce::String (cents, 1) + " cents" : juce::String ("unknown")) << "\n"
-              << "calibrated keys " << calib.numKeys() << "\n";
+              << "tuning " << (sure ? juce::String (cents, 1) + " cents" : juce::String ("unknown")) << "\n";
         if (auto* dev = engine.getDeviceManager().getCurrentAudioDevice())
             notes << "device " << dev->getTypeName() << " / " << dev->getName() << "\n";
         if (song != nullptr)
@@ -246,9 +242,6 @@ MainComponent::MainComponent (const LaunchOptions& options) : opts (options), sc
         }
     };
     settingsPanel.bindMeter();
-
-    calibration.onSkip = [this] { nextCalibrationKey (false); };
-    calibration.onDone = [this] { finishCalibration(); };
 
     restoreSettings();
 
@@ -292,7 +285,6 @@ MainComponent::MainComponent (const LaunchOptions& options) : opts (options), sc
     if (opts.seek > -1e8) engine.withPlayer ([this] (Player& p) { p.seek (opts.seek); });
     if (opts.play) engine.withPlayer ([] (Player& p) { p.setPlaying (true); });
     if (opts.openSettings) showSettings (true);
-    if (opts.calibrate) startCalibration();
 
     setSize (opts.width, opts.height);
     vblank = juce::VBlankAttachment (this, [this] { frame(); });
@@ -401,21 +393,6 @@ void MainComponent::frame()
         toast.show ("Loop " + juce::String (s.loopPass + 1) + kDot + juce::String (juce::roundToInt (s.speed * 100)) + "%", theme::loopTint);
     lastLoopPass = s.loopPass;
 
-    // Calibration: wait for the detector to capture the spotlighted key.
-    if (calibIndex >= 0)
-    {
-        calibCooldown -= dt;
-        if (calibCooldown <= 0.0f && calibCooldown > -1000.0f && engine.captureFinished())
-        {
-            engine.storeCapture (calib);
-            calibration.flashSuccess();
-            calibCooldown = -2000.0f; // advance after the success animation
-            juce::Timer::callAfterDelay (550, [safe = juce::Component::SafePointer<MainComponent> (this)] {
-                if (safe != nullptr) safe->nextCalibrationKey (true);
-            });
-        }
-    }
-
     Animated::tickAll (dt);
     stage.frame (dt, s, t, heard.data(), numHeard);
     timeline.setTime (t);
@@ -521,9 +498,6 @@ void MainComponent::paintOverChildren (juce::Graphics& g)
         g.fillRect (getLocalBounds().withTrimmedTop (kTopBarH).withRight (settingsPanel.getX()));
     }
 
-    if (calibration.isVisible())
-        return;
-
     // Empty state / drop target.
     if (song == nullptr || dropHover.value > 0.01f)
     {
@@ -566,7 +540,6 @@ void MainComponent::resized()
     auto bar = b.removeFromTop (kTopBarH);
     timeline.setBounds (b.removeFromTop (kTimelineH));
     stage.setBounds (b);
-    calibration.setBounds (getLocalBounds().withTrimmedTop (kTopBarH));
     toast.setBounds (getLocalBounds().withTrimmedTop (kTopBarH + kTimelineH + 18).withHeight (52));
 
     bar.reduce (12, 0);
@@ -650,8 +623,7 @@ bool MainComponent::keyPressed (const juce::KeyPress& k)
     if (code == juce::KeyPress::tabKey)   { setMode (engine.snapshot().mode == Mode::Learn ? Mode::Freeplay : Mode::Learn); return true; }
     if (code == juce::KeyPress::escapeKey)
     {
-        if (calibIndex >= 0) finishCalibration();
-        else if (settingsOpen) showSettings (false);
+        if (settingsOpen) showSettings (false);
         return true;
     }
     if (mods.isCommandDown() && (code == 'O' || code == 'o')) { openFileChooser(); return true; }
@@ -1018,46 +990,6 @@ void MainComponent::openAudioSettings()
 }
 
 // ---------------------------------------------------------------------------------------------
-// Calibration
-// ---------------------------------------------------------------------------------------------
-void MainComponent::startCalibration()
-{
-    engine.withPlayer ([] (Player& p) { p.setPlaying (false); });
-    engine.setCalibrating (true);
-    calibKeys.clear();
-    for (int p = 21; p <= 108; p += 3) calibKeys.push_back (p);
-    calibIndex = -1;
-    calibration.setVisible (true);
-    calibration.toFront (false);
-    toast.toFront (false);
-    nextCalibrationKey (false);
-}
-
-void MainComponent::nextCalibrationKey (bool)
-{
-    ++calibIndex;
-    if (calibIndex >= (int) calibKeys.size()) { finishCalibration(); return; }
-    const int p = calibKeys[(size_t) calibIndex];
-    calibration.setStep (p, calibIndex, (int) calibKeys.size());
-    stage.setSpotlight (p);
-    engine.beginCapture (p);
-    calibCooldown = 0.25f;
-}
-
-void MainComponent::finishCalibration()
-{
-    calibIndex = -1;
-    engine.setCalibrating (false);
-    calibration.setVisible (false);
-    stage.setSpotlight (-1);
-    engine.setCalibration (calib);
-    settings.get().setValue ("calibration", calib.toBinary().toBase64Encoding());
-    settingsPanel.setCalibrationStatus (calib.numKeys());
-    if (calib.numKeys() > 0) toast.show ("Learned " + juce::String (calib.numKeys()) + " keys", theme::good);
-    saveSettings();
-}
-
-// ---------------------------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------------------------
 void MainComponent::showSettings (bool show)
@@ -1067,7 +999,6 @@ void MainComponent::showSettings (bool show)
     {
         refreshInstrumentList();
         settingsPanel.setValues (volume, playMyPart, micOn, sensitivity, earlyWindow, jumpLeadIn, splitPitch, showNames, lookahead);
-        settingsPanel.setCalibrationStatus (calib.numKeys());
         settingsPanel.setVisible (true);
         settingsPanel.toFront (false);
         toast.toFront (false);
@@ -1096,9 +1027,6 @@ void MainComponent::restoreSettings()
         engine.withPlayer ([sp = s.getDoubleValue ("speed", 1.0)] (Player& p) { p.setSpeed (sp); });
 
         if (auto xml = s.getXmlValue ("pluginList")) plugins.restoreList (xml.get());
-        juce::MemoryBlock mb;
-        if (mb.fromBase64Encoding (s.getValue ("calibration")) && calib.fromBinary (mb))
-            engine.setCalibration (calib);
     }
 
     handsSeg.setSelected (handsSegment, false);

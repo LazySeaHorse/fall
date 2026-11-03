@@ -287,7 +287,6 @@ void Stage::paintKeyboard (juce::Graphics& g)
         c = c.interpolatedWith (theme::handColour (k.right).withMultipliedSaturation (0.75f), k.expected * (0.35f + 0.25f * pulse));
         c = c.interpolatedWith (theme::handColour (k.right), k.press * 0.85f);
         c = c.interpolatedWith (theme::good, k.good * 0.8f);
-        if (p == spotlight) c = c.interpolatedWith (theme::heard, 0.55f + 0.3f * pulse);
         return c;
     };
 

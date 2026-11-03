@@ -12,7 +12,7 @@ class SettingsPanel : public juce::Component, private Animated
 public:
     // ---- wired by MainComponent ----
     std::function<void (int index)> onInstrumentChosen; // 0 = built-in, 1.. = instruments list
-    std::function<void()> onRescan, onAddPluginFile, onShowInstrumentWindow, onAudioSettings, onCalibrate, onClose, onSaveRecording;
+    std::function<void()> onRescan, onAddPluginFile, onShowInstrumentWindow, onAudioSettings, onClose, onSaveRecording;
     std::function<void (bool)> onMicEnabled, onShowNames, onPlayMyPart, onRawMic;
     std::function<juce::String()> getTuningText;
     std::function<void (double)> onSensitivity, onEarlyWindow, onLookahead, onVolume, onJumpLeadIn;
@@ -62,9 +62,6 @@ public:
         rawMic.onToggle = [this] (bool b) { if (onRawMic) onRawMic (b); };
         hint (p, "Skips Windows' voice effects, which treat piano tones as noise. Turn off only if the input level stays empty.");
        #endif
-        addButtons (p, { { &calibrate, "Teach Fall my piano..." } });
-        calibrate.onClick = [this] { if (onCalibrate) onCalibrate(); };
-        hint (p, calibrationHint);
         addButtons (p, { { &saveRecording, "Save what Fall heard" } });
         saveRecording.onClick = [this] { if (onSaveRecording) onSaveRecording(); };
         hint (p, "Saves the last 90 seconds from the microphone, with what Fall expected and heard, for tracking down missed notes.");
@@ -117,13 +114,6 @@ public:
         splitPitch.setValue (split, juce::dontSendNotification);
         showNames.setToggled (names);
         lookahead.setValue (look, juce::dontSendNotification);
-    }
-
-    void setCalibrationStatus (int keys)
-    {
-        calibrationHint->setText (keys > 0 ? juce::String (keys) + " keys learned from your piano. Recalibrate if you move the laptop."
-                                           : "Play a few keys so Fall learns how your piano sounds through this mic.",
-                                  juce::dontSendNotification);
     }
 
     void setRawMic (bool b) { rawMic.setToggled (b); }
@@ -273,13 +263,12 @@ private:
     bool updating = false;
 
     juce::ComboBox instrument;
-    juce::TextButton rescan, addFile, showWindow, audio, calibrate, saveRecording;
+    juce::TextButton rescan, addFile, showWindow, audio, saveRecording;
     juce::Label tuning;
     int tuningFrames = 0;
     juce::Slider volume, sensitivity, earlyWindow, lookahead, jumpLeadIn, splitPitch;
     Switch playMyPart, micEnabled, showNames, rawMic;
     Meter meter;
-    juce::Label* calibrationHint = nullptr;
     juce::Label* instrumentHint = nullptr;
 
     struct CloseButton : Pressable

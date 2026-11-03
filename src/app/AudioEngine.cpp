@@ -134,17 +134,15 @@ void AudioEngine::processBlock (const float* const* inputs, int numIn, float* co
                 pushHeard (e);
                 recorder.logHeard (o.samplePosition, e.pitches, e.accepted, e.latencyMs);
             }
-            const bool calib = calibrating.load();
-            if (calib != wasCalibrating || player.getGroupsCompleted() != expectedGroups || player.nextGroupTime() != expectedGate)
+            if (player.getGroupsCompleted() != expectedGroups || player.nextGroupTime() != expectedGate)
             {
-                wasCalibrating = calib;
                 expectedGroups = player.getGroupsCompleted();
                 expectedGate = player.nextGroupTime();
-                const PitchSet exp = calib ? PitchSet() : player.expectedPitches();
+                const PitchSet exp = player.expectedPitches();
                 detector.setExpected (exp);
                 recorder.logExpected (exp);
             }
-            detector.setWatchKeys (calib ? PitchSet() : player.jumpKeys());
+            detector.setWatchKeys (player.jumpKeys());
             inputDb.store (detector.getInputLevelDb());
         }
 
@@ -263,30 +261,6 @@ void AudioEngine::setSensitivity (float s)
 {
     const juce::SpinLock::ScopedLockType sl (lock);
     detector.setSensitivity (s);
-}
-
-void AudioEngine::setCalibration (const Calibration& c)
-{
-    const juce::SpinLock::ScopedLockType sl (lock);
-    detector.setCalibration (c);
-}
-
-void AudioEngine::beginCapture (int pitch)
-{
-    const juce::SpinLock::ScopedLockType sl (lock);
-    detector.beginCapture (pitch);
-}
-
-bool AudioEngine::captureFinished()
-{
-    const juce::SpinLock::ScopedLockType sl (lock);
-    return detector.captureFinished();
-}
-
-void AudioEngine::storeCapture (Calibration& into)
-{
-    const juce::SpinLock::ScopedLockType sl (lock);
-    detector.storeCapture (into);
 }
 
 void AudioEngine::pushHeard (const HeardEvent& e)

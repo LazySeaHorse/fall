@@ -14,8 +14,6 @@ connection.
   up with the strings of those keys, like a tuner, so snaps, claps and typing don't count. It also
   works out your piano's tuning by itself. The keys it hears show on screen as pink dots, and if
   you play the right key in the wrong octave, Fall tells you.
-- **Calibration.** *Settings → Teach Fall my piano* has you play about 30 keys, so Fall learns how
-  your piano sounds through your microphone.
 - **Jump keys.** Drop markers on the timeline (`M` or right-click) and bind each one to a piano
   key. Playing that key jumps the song back to the marker. Fall suggests the top keys (C8,
   B7, A7…), which songs rarely use and which the microphone hears most clearly.
@@ -84,7 +82,7 @@ Fall --screenshot shot.png --midi tests/data/ode_to_joy.mid --mode learn --seek 
 ```
 
 The flags are `--frames-dir DIR`, `--loop A:B`, `--marker T:PITCH:NAME`, `--hands left|right`,
-`--speed X`, `--settings`, `--calibrate` and `--auto-learn`. See `LaunchOptions` in
+`--speed X`, `--settings` and `--auto-learn`. See `LaunchOptions` in
 `src/app/MainComponent.h`.
 
 ## Layout

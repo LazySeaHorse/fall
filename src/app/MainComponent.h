@@ -25,7 +25,6 @@ struct LaunchOptions
     bool         noAudio = false;
     bool         autoLearn = false; // pretend to be a perfect player in learn mode
     bool         openSettings = false;
-    bool         calibrate = false;
     juce::String mode, hands;
     double       loopA = -1.0, loopB = -1.0;
     std::vector<Marker> markers;
@@ -90,11 +89,6 @@ private:
     void showInstrumentWindow();
     void openAudioSettings();
 
-    // calibration
-    void startCalibration();
-    void nextCalibrationKey (bool captured);
-    void finishCalibration();
-
     void showSettings (bool show);
     void restoreSettings();
     void saveSettings();
@@ -125,7 +119,6 @@ private:
     Timeline timeline;
     Toast toast;
     SettingsPanel settingsPanel;
-    CalibrationOverlay calibration;
 
     IconButton openButton { icons::folder, "Open a MIDI file (Ctrl+O)" };
     IconButton restartButton { icons::restart, "Back to the start (Home)" };
@@ -167,12 +160,6 @@ private:
     int instrumentIndex = 0; // 0 = built-in
     juce::String instrumentName { "Built-in piano" };
     std::unique_ptr<PluginWindow> pluginWindow;
-
-    // calibration
-    Calibration calib;
-    std::vector<int> calibKeys;
-    int calibIndex = -1;
-    float calibCooldown = 0.0f;
 
     // marker key learning
     int listeningMarker = -1;

@@ -27,9 +27,6 @@ public:
     std::function<void (double factor)> onZoom;
     std::function<void()> onEmptyClick; // clicked the waterfall with no song loaded
 
-    // Highlight a key for calibration (-1 = none).
-    void setSpotlight (int pitch) { spotlight = pitch; }
-
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
@@ -78,7 +75,6 @@ private:
     float waitingFor = 0;  // seconds spent waiting at the current chord
     Spring chipAlpha { 0.0f, 260.0f, 32.0f };
 
-    int spotlight = -1;
     int mousePitch = -1;
     juce::Random rng;
 };
