@@ -27,6 +27,8 @@ FetchContent_Declare(FST
     SOURCE_SUBDIR  do-not-build)
 FetchContent_MakeAvailable(FST)
 
+include(cmake/Aubio.cmake)
+
 # Shared JUCE flags for every target we build.
 add_library(fall_juce_flags INTERFACE)
 target_compile_definitions(fall_juce_flags INTERFACE
