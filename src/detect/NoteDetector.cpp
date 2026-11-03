@@ -109,7 +109,9 @@ struct NoteDetector::Impl
     bool     pending = false;
     int64_t  strikeHop = 0, strikePos = 0;
     float    strikeStrength = 0;
-    int64_t  strikeGap = 0;  // samples since the previous strike
+    float    strikeLevel = 0;
+    int64_t  reportPos = -100000000; // strike position of the latest report
+    int      reportKey = -1;
     int      prevKey = -1;   // the note that was already sounding before the strike
     int      lastKey = -1;   // the key of the latest steady pitch
 
@@ -188,6 +190,7 @@ struct NoteDetector::Impl
         runMidi = runSum = 0; runLen = 0;
         pending = false;
         lastKey = -1;
+        reportPos = -100000000; reportKey = -1;
         levelDb.store (-100.0f);
         floorOut.store (-100.0f);
         if (pitch != nullptr) // flush the tracker's history
@@ -240,19 +243,25 @@ struct NoteDetector::Impl
         // key that is still ringing) a big burst of hammer noise above 2 kHz
         const float before = level.before (hopIdx);
         const float attackRise = attack.db (hopIdx, 2) - attack.before (hopIdx);
+        // a hammer hitting strings: noise above 2 kHz jumps within ~10 ms (a swell creeps up)
+        const float hammer = attack.db (hopIdx, 1) - attack.db (hopIdx - 2, 1);
        #ifdef FALL_DETECT_TRACE
         {
             static const double t0 = std::getenv ("FALL_T0") ? std::atof (std::getenv ("FALL_T0")) : 1e9;
             static const double t1 = std::getenv ("FALL_T1") ? std::atof (std::getenv ("FALL_T1")) : -1.0;
             const double now = (double) pos / fs;
             if (now >= t0 && now <= t1)
-                std::fprintf (stderr, "[hop] t=%.3f fast=%.1f floor=%.1f before=%.1f midi=%.2f run=%d conf=%.2f att=%.1f\n", now, fast, floorDb, before, m, runLen, (double) aubio_pitch_get_confidence (pitch), attackRise);
+                std::fprintf (stderr, "[hop] t=%.3f fast=%.1f floor=%.1f before=%.1f midi=%.2f run=%d conf=%.2f att=%.1f ham=%.1f\n", now, fast, floorDb, before, m, runLen, (double) aubio_pitch_get_confidence (pitch), attackRise, hammer);
         }
        #endif
         const bool loud = floorSet && fast >= floorDb + gateDb;
-        if (loud && pos - hop - lastStrikePos >= refractory && (fast - before >= riseDb || attackRise >= 2.0f * riseDb))
+        // While a strike has reported nothing yet, a hammer or a clearly louder jump replaces it:
+        // the finger's thump on the key often comes 50-90 ms before the hammer reaches the string.
+        const bool jump = fast - before >= riseDb || attackRise >= 2.0f * riseDb;
+        const bool louder = pending && (fast >= strikeLevel + riseDb || hammer >= riseDb);
+        if (loud && jump && (louder || (! pending && pos - hop - lastStrikePos >= refractory)))
         {
-            prevKey = runLen >= needHops ? keyFor (runMidi) : lastKey;
+            if (! pending) prevKey = runLen >= needHops ? keyFor (runMidi) : lastKey;
             startStrike (pos - hop, fast);
             runLen = 0; // only pitch heard after the strike counts
         }
@@ -285,15 +294,16 @@ struct NoteDetector::Impl
                 const int key = keyFor (runMidi);
                 // the note that was already sounding, still in the pitch window
                 const bool stale = key == prevKey && since < earlyHops;
-                // the same key right after its strike: that strike's level rising in steps, not a new one
-                const bool sameStrike = key == prevKey && strikeGap < (int64_t) (kSameKeySecs * fs);
+                // the same key right after its report: that strike's level rising in steps, not a new one
+                const bool sameStrike = key == reportKey && strikePos - reportPos < (int64_t) (kSameKeySecs * fs);
                 const bool isWatch = key >= 0 && watch.test ((size_t) key);
                 if (sameStrike && ! stale)
                     pending = false;
                 else if (key >= 0 && ! stale && (! isWatch || runLen >= needWatchHops))
                 {
                     pending = false; // one note per strike
-                    lastKey = key;
+                    lastKey = reportKey = key;
+                    reportPos = strikePos;
                     learnTuning (key, runMidi);
                     emit (key);
                 }
@@ -304,8 +314,8 @@ struct NoteDetector::Impl
 
     void startStrike (int64_t at, float fast)
     {
-        strikeGap = at - lastStrikePos;
         pending = true;
+        strikeLevel = fast;
         strikeHop = hopIdx;
         strikePos = std::max<int64_t> (0, at);
         strikeStrength = std::clamp ((fast - floorDb) / 30.0f, 0.0f, 2.0f);
