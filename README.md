@@ -9,11 +9,12 @@ connection.
 - **Your own instruments.** Fall plays the song through any VST3 or older VST2 (.dll) instrument you
   have installed, such as Pianoteq, and keeps its preset between sessions. A small built-in piano covers the case
   where you haven't picked one.
-- **Hearing your piano.** Fall knows which notes come next, so it only has to check whether they
-  were played. That keeps it fast, at a few tens of milliseconds. It checks that what it hears lines
-  up with the strings of those keys, like a tuner, so snaps, claps and typing don't count. It also
-  works out your piano's tuning by itself. The keys it hears show on screen as pink dots, and if
-  you play the right key in the wrong octave, Fall tells you.
+- **Hearing your piano.** Fall listens for one note at a time, like a tuner. A note must be struck
+  clearly above the room's own noise, so silence never counts, and must have a steady pitch, so
+  snaps, claps and typing don't count either. This uses [aubio](https://aubio.org)'s pitch tracker.
+  Notes from C3 up are heard within about 40–90 ms. In a chord, playing one of its notes is enough.
+  Fall also works out your piano's tuning by itself. The keys it hears show on screen as pink dots,
+  and if you play the right key in the wrong octave, Fall tells you.
 - **Jump keys.** Drop markers on the timeline (`M` or right-click) and bind each one to a piano
   key. Playing that key jumps the song back to the marker. Fall suggests the top keys (C8,
   B7, A7…), which songs rarely use and which the microphone hears most clearly.
@@ -97,4 +98,5 @@ The flags are `--frames-dir DIR`, `--loop A:B`, `--marker T:PITCH:NAME`, `--hand
 
 ## License
 
-AGPL-3.0-or-later. See [LICENSE](LICENSE). Built with [JUCE](https://juce.com) (AGPLv3).
+AGPL-3.0-or-later. See [LICENSE](LICENSE). Built with [JUCE](https://juce.com) (AGPLv3) and
+[aubio](https://aubio.org) (GPLv3).
