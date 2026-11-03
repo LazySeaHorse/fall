@@ -1,23 +1,19 @@
 #pragma once
 
-// Real-time piano note detection from a single microphone (e.g. a laptop mic).
+// Real-time piano note detection from one microphone: one note at a time (no chords).
 //
-// Design brief:
-//  * We usually KNOW which notes should be played next (learn mode), so the main job is
-//    verification, not general transcription: "did a new note start, and does it look like
-//    one of the expected pitches?"
-//  * False positives are acceptable; missed notes and latency are not.
-//  * A separate, looser "what did I press" estimate is shown on screen (display only).
-//  * Jump keys (usually the extreme keys like A0/B0/C8) must be stricter: a false trigger
-//    jumps the song, which is annoying.
+//   1. Loudness gate: a note must start clearly above the room's noise level (tracked
+//      continuously), and the level must jump (a strike), so silence can never trigger anything.
+//   2. Pitch: aubio's YIN-FFT pitch tracker. After a strike, the first pitch that stays steady for
+//      a few milliseconds is the note that was played.
+//   3. Learn mode: that note counts if it is one the song is waiting for. Jump keys must hold
+//      their pitch a little longer.
 //
-// Threading: everything here is called from the audio thread. process() must not allocate,
-// lock, or do I/O. prepare()/setCalibration() may allocate and are called while audio is stopped
-// (or under the engine's lock).
+// Threading: process() runs on the audio thread and does not allocate, lock or do I/O.
+// prepare() allocates and is called while audio is stopped (or under the engine's lock).
 
 #include "core/Song.h"
 
-#include <array>
 #include <cstdint>
 #include <memory>
 
@@ -26,32 +22,12 @@ namespace fall
 
 struct DetectedOnset
 {
-    int64_t  samplePosition = 0; // position of the onset in the detector's input stream
+    int64_t  samplePosition = 0; // where the strike began in the detector's input stream
     int64_t  reportedAt     = 0; // stream position when it was reported (reportedAt - samplePosition = latency)
-    float    strength       = 0; // onset strength, roughly 0..1+
-    PitchSet expectedHits;       // expected pitches judged present (learn mode)
-    PitchSet watchHits;          // watch keys (jump keys) judged present with high confidence
-    PitchSet pitches;            // best-effort "what was played", for display only
-};
-
-// Per-key spectral fingerprints captured from the user's own piano + mic.
-class Calibration
-{
-public:
-    Calibration();
-    ~Calibration();
-    Calibration (const Calibration&);
-    Calibration& operator= (const Calibration&);
-
-    bool hasKey (int pitch) const;
-    int  numKeys() const;
-    void clear();
-
-    juce::MemoryBlock toBinary() const;
-    bool fromBinary (const juce::MemoryBlock&);
-
-    struct Impl;
-    std::unique_ptr<Impl> impl;
+    float    strength       = 0; // how far above the room noise the strike was, roughly 0..1+
+    PitchSet expectedHits;       // the heard note, if the song was waiting for it (learn mode)
+    PitchSet watchHits;          // the heard note, if it is a jump key
+    PitchSet pitches;            // the heard note (display)
 };
 
 class NoteDetector
@@ -65,33 +41,21 @@ public:
 
     // Learn mode: the pitches the song is waiting for (may be empty).
     void setExpected (const PitchSet& pitches);
-    // Jump keys: reported in DetectedOnset::watchHits only with high confidence.
+    // Jump keys: reported in DetectedOnset::watchHits.
     void setWatchKeys (const PitchSet& pitches);
-    // 0 = only very clear notes, 1 = trigger-happy. Default 0.6.
+    // 0 = only loud, clear notes; 1 = trigger-happy. Default 0.6.
     void setSensitivity (float s);
-    void setCalibration (const Calibration& c);
 
-    // Feed mono microphone samples. Writes up to maxOut onsets, returns how many.
+    // Feed mono microphone samples. Writes up to maxOut detections, returns how many.
     int process (const float* mono, int numSamples, DetectedOnset* out, int maxOut);
 
-    // Smoothed input level in dBFS, for an input meter.
+    // Smoothed input level and the room noise level, in dBFS (for meters / logs).
     float getInputLevelDb() const noexcept;
+    float getNoiseFloorDb() const noexcept;
 
-    // The piano's tuning relative to A440 equal temperament, in cents (-50..50), estimated from
-    // everything heard so far, like a tuner. `confident` is false until enough clear notes were heard.
-    // Uncalibrated keys are matched against this tuning automatically.
+    // The piano's tuning relative to A440, in cents (-50..50), from the notes heard so far.
+    // `confident` is false until a few clear notes were heard.
     float getTuningCents (bool* confident = nullptr) const noexcept;
-
-    // Developer hook for the eval tool: override one tuning constant by name (e.g. "expectedMin"),
-    // applied on top of the sensitivity mapping. Returns false for unknown names. Not for the app.
-    bool setTuningOverride (const juce::String& name, float value);
-
-    // --- Calibration capture: the user plays one key, we store its fingerprint. ---
-    // Starts listening for the next clear onset and assigns it to `pitch`.
-    void beginCapture (int pitch);
-    // True once the capture for the current pitch finished (then copy it into a Calibration).
-    bool captureFinished() const noexcept;
-    void storeCapture (Calibration& into) const;
 
     struct Impl;
 
