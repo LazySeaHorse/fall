@@ -69,6 +69,7 @@ void Stage::frame (float dt, const EngineSnapshot& s, double t, const HeardEvent
                             && s.nextGate >= 0 && s.nextGate - t < 0.6 * std::max (0.25, s.speed);
         k.expected = approach (k.expected, expect ? 1.0f : 0.0f, dt, 0.08f, 0.15f);
         k.good     = approach (k.good, (learn && s.satisfied.test ((size_t) p)) ? 1.0f : 0.0f, dt, 0.03f, 0.35f);
+        k.missed   = approach (k.missed, 0.0f, dt, 0.0f, 0.5f);
 
         // New note crossing the key line: a small spray of light.
         if (on && ! prevSounding.test ((size_t) p) && layout.contains (p) && particles.size() < 480)
@@ -102,6 +103,17 @@ void Stage::frame (float dt, const EngineSnapshot& s, double t, const HeardEvent
                 ripples.push_back ({ r.getCentreX(), keylineY, 0.0f, theme::good });
             }
     lastGroupsCompleted = s.groupsCompleted;
+
+    // A chord was skipped ("keep going if mostly right"): its keys flash red, with red ripples.
+    if (s.groupsSkipped > lastGroupsSkipped)
+        for (int p = 0; p < 128; ++p)
+            if (s.lastSkipped.test ((size_t) p) && layout.contains (p))
+            {
+                keys[(size_t) p].missed = 1.0f;
+                const auto r = keyRect (p);
+                ripples.push_back ({ r.getCentreX(), keylineY, 0.0f, theme::missed });
+            }
+    lastGroupsSkipped = s.groupsSkipped;
     lastExpected = s.expected;
 
     for (auto& pt : particles)
@@ -287,6 +299,7 @@ void Stage::paintKeyboard (juce::Graphics& g)
         c = c.interpolatedWith (theme::handColour (k.right).withMultipliedSaturation (0.75f), k.expected * (0.35f + 0.25f * pulse));
         c = c.interpolatedWith (theme::handColour (k.right), k.press * 0.85f);
         c = c.interpolatedWith (theme::good, k.good * 0.8f);
+        c = c.interpolatedWith (theme::missed, k.missed * 0.85f);
         return c;
     };
 

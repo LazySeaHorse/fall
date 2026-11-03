@@ -50,6 +50,7 @@ namespace theme
     inline const juce::Colour leftHand    { 0xffb9a5ff };
     inline const juce::Colour heard       { 0xffff9cc8 };
     inline const juce::Colour good        { 0xffa8e86c };
+    inline const juce::Colour missed      { 0xffff453a }; // a chord that was skipped
     inline const juce::Colour loopTint    { 0xffffd60a };
 
     inline juce::Colour handColour (bool right) { return right ? rightHand : leftHand; }

@@ -211,6 +211,8 @@ void AudioEngine::refreshSnapshotLocked()
     snap.loop            = player.getLoop();
     snap.loopPass        = player.getLoopPass();
     snap.groupsCompleted = player.getGroupsCompleted();
+    snap.groupsSkipped   = player.getGroupsSkipped();
+    snap.lastSkipped     = player.lastSkippedPitches();
     snap.wallMs          = juce::Time::getMillisecondCounterHiRes();
 }
 

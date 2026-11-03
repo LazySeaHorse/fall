@@ -58,7 +58,7 @@ private:
 
     struct KeyState
     {
-        float press = 0, heard = 0, heardPop = 0, expected = 0, good = 0;
+        float press = 0, heard = 0, heardPop = 0, expected = 0, good = 0, missed = 0;
         bool  right = true;
     };
     std::array<KeyState, 128> keys {};
@@ -69,7 +69,7 @@ private:
     std::vector<Particle> particles;
     struct Ripple { float x, y, age; juce::Colour c; };
     std::vector<Ripple> ripples;
-    int lastGroupsCompleted = 0;
+    int lastGroupsCompleted = 0, lastGroupsSkipped = 0;
     PitchSet lastExpected;
 
     float waitingFor = 0;  // seconds spent waiting at the current chord

@@ -28,6 +28,8 @@ struct EngineSnapshot
     LoopSettings loop;
     int          loopPass = 0;
     int          groupsCompleted = 0;
+    int          groupsSkipped = 0;
+    PitchSet     lastSkipped;     // the chord skipped last
     double       wallMs = 0.0;    // juce::Time::getMillisecondCounterHiRes() at capture
 };
 
