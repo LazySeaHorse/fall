@@ -6,6 +6,10 @@ your acoustic piano. Fall listens through the laptop microphone, so the piano ne
 connection.
 
 - **Two modes.** *Free play* scrolls in time. *Learn* waits for you to play each chord.
+- **Keep going if mostly right.** An optional Learn setting (Settings, off by default). If you got
+  8 of the last 10 chords and the previous one, a chord you haven't played after half a second is
+  skipped: its keys flash red and the song moves on. Never two skipped in a row, and the first 8
+  chords after a start or jump must be played.
 - **Your own instruments.** Fall plays the song through any VST3 or older VST2 (.dll) instrument you
   have installed, such as Pianoteq, and keeps its preset between sessions. A small built-in piano covers the case
   where you haven't picked one.
