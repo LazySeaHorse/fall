@@ -6,3 +6,6 @@ target_compile_definitions(fall_tests PRIVATE
     FALL_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
 include(${Catch2_SOURCE_DIR}/extras/Catch.cmake)
 catch_discover_tests(fall_tests)
+if(FALL_DETECT_TRACE)
+    target_compile_definitions(fall_tests PRIVATE FALL_DETECT_TRACE=1)
+endif()

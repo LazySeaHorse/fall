@@ -7,6 +7,7 @@
 
 #include "detect/NoteDetector.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -50,7 +51,10 @@ inline double hz (int pitch) { return 440.0 * std::pow (2.0, (pitch - 69) / 12.0
 inline void addPianoNote (std::vector<float>& buf, const SynthNote& n, double sr, Rng& rng)
 {
     const double f0 = hz (n.pitch) * std::pow (2.0, n.cents / 1200.0);
-    const double B  = n.pitch < 45 ? 1.5e-4 : 8e-5 * std::pow (2.0, (n.pitch - 45) / 8.0);
+    // Inharmonicity, capped in the top octaves: uncapped, this curve makes C7 read ~55 cents sharp
+    // through a pitch tracker, while a real grand recorded through a laptop mic reads within ~15
+    // cents (C7 96.11, C8 108.1 in a user's recording).
+    const double B  = n.pitch < 45 ? 1.5e-4 : std::min (2.5e-3, 8e-5 * std::pow (2.0, (n.pitch - 45) / 8.0));
     // sustain time depends on register: bass strings ring for many seconds, treble ones die quickly
     const double tau0 = 6.0 * std::pow (2.0, -(n.pitch - 21) / 22.0) + 0.5;
     const double amp  = 0.02 + 0.25 * (double) n.velocity * (double) n.velocity;
