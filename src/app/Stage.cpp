@@ -162,13 +162,32 @@ void Stage::paintBackground (juce::Graphics& g)
     g.setGradientFill (juce::ColourGradient (theme::stageTop, 0, 0, theme::stageBottom, 0, keylineY, false));
     g.fillRect (b.withBottom (keylineY));
 
-    // Faint guides at every C and F so you can find your place.
+    // Faint grooves each key's notes fall down: a line at every white-key boundary (stronger at
+    // each C) and a slightly lighter lane, edged by two lines, behind every black key.
     for (int p = layout.lowest(); p <= layout.highest(); ++p)
     {
-        const int pc = p % 12;
-        if (pc != 0 && pc != 5) continue;
-        g.setColour (juce::Colours::white.withAlpha (pc == 0 ? 0.055f : 0.025f));
-        g.fillRect (layout.keyX (p) - 0.5f, 0.0f, 1.0f, keylineY);
+        if (isBlackKey (p))
+        {
+            g.setColour (theme::laneBlackFill);
+            g.fillRect (layout.keyX (p), 0.0f, layout.keyW (p), keylineY);
+        }
+    }
+    for (int p = layout.lowest(); p <= layout.highest(); ++p)
+    {
+        const float x = layout.keyX (p), w = layout.keyW (p);
+        if (isBlackKey (p))
+        {
+            g.setColour (theme::laneLine);
+            g.fillRect (x - 0.5f, 0.0f, 1.0f, keylineY);
+            g.fillRect (x + w - 0.5f, 0.0f, 1.0f, keylineY);
+        }
+        else
+        {
+            // A black key just left of this white one already draws its own edge over this boundary.
+            if (p > layout.lowest() && isBlackKey (p - 1)) continue;
+            g.setColour (p % 12 == 0 ? theme::laneLineC : theme::laneLine);
+            g.fillRect (x - 0.5f, 0.0f, 1.0f, keylineY);
+        }
     }
 
     // Loop region: brackets drawn as the band it occupies in the waterfall.

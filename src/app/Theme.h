@@ -44,6 +44,10 @@ namespace theme
     // The stage (waterfall) is always dark: it's a light show, and it keeps contrast high.
     inline const juce::Colour stageTop    { 0xff07070b };
     inline const juce::Colour stageBottom { 0xff111119 };
+    // Key lanes in the waterfall: white-key boundaries, C boundaries, and the black-key lane fill.
+    inline const juce::Colour laneLine      { 0x0affffff };
+    inline const juce::Colour laneLineC     { 0x14ffffff };
+    inline const juce::Colour laneBlackFill { 0x06ffffff };
     // Pastel teal (right hand) and pastel purple (left hand), matching the app icon. "Heard" and
     // "accepted" stay clear of both: soft pink and soft lime.
     inline const juce::Colour rightHand   { 0xff7ee0d2 };
