@@ -1,6 +1,7 @@
 #include "Player.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <map>
 
@@ -14,7 +15,7 @@ void Player::setSong (std::shared_ptr<const Song> s)
     loop = {};
     loopPass = 0;
     playing = false;
-    groupsCompleted = 0;
+    groupsCompleted = groupsSkipped = 0;
     groups = song ? buildGroups (*song, practiceHands) : std::vector<NoteGroup> {};
     time = song ? std::max (kMinTime, song->firstNoteTime() - 2.0) : 0.0;
     needsResync = true;
@@ -86,9 +87,17 @@ PitchSet Player::jumpKeys() const noexcept
     return keys;
 }
 
+void Player::setForgiving (bool on)
+{
+    forgiving = on;
+    history = 0;
+}
+
 void Player::resync()
 {
     satisfied.reset();
+    history = 0;
+    waited = 0.0;
     if (! song) { nextNote = nextControl = nextGroup = 0; return; }
 
     nextNote = song->firstNoteAtOrAfter (time);
@@ -142,11 +151,29 @@ int Player::notePlayed (const PitchSet& pitches)
     satisfied |= (pitches & ~jumpKeys()) & g.pitches;
     if ((satisfied & g.pitches) == g.pitches)
     {
-        ++nextGroup;
         ++groupsCompleted;
-        satisfied.reset();
+        decided (true);
     }
     return -1;
+}
+
+void Player::decided (bool played)
+{
+    history = ((history << 1) | (played ? 1u : 0u)) & 0x3ffu;
+    ++nextGroup;
+    satisfied.reset();
+    waited = 0.0;
+}
+
+void Player::skipIfMostlyRight()
+{
+    const bool lastWasHit = (history & 1u) != 0;
+    if (forgiving && waited >= 0.5 - 1e-9 && lastWasHit && std::popcount (history) >= 8)
+    {
+        lastSkipped = groups[nextGroup].pitches;
+        ++groupsSkipped;
+        decided (false);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -256,6 +283,12 @@ void Player::render (juce::MidiBuffer& out, int numSamples, double sampleRate)
     if (! playing)
         return;
 
+    if (isWaiting())
+    {
+        waited += numSamples / sampleRate;
+        skipIfMostlyRight();
+    }
+
     double sample = 0.0;
     for (int guard = 0; guard < 64 && sample < numSamples - 0.5; ++guard)
     {
@@ -279,7 +312,11 @@ void Player::render (juce::MidiBuffer& out, int numSamples, double sampleRate)
         time = target;
 
         if (stop == Stop::Gate)
+        {
+            if (waited == 0.0)
+                waited = (numSamples - sample) / sampleRate; // the rest of this block is already waiting
             break; // hold here until notePlayed() opens the gate
+        }
 
         if (stop == Stop::SongEnd)
         {

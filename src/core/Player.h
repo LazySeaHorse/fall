@@ -67,6 +67,12 @@ public:
     // How early (real seconds) a correct note may be played before its chord reaches the key line.
     void setEarlyWindow (double realSeconds) { earlyWindow = realSeconds; }
 
+    // Learn mode "keep going if mostly right": a chord you haven't played is skipped (and counted as
+    // missed) once the song has waited 0.5 s at it, if 8 of the last 10 chords were played and the
+    // one before this was too. Off: wait for every chord.
+    void setForgiving (bool on);
+    bool isForgiving() const noexcept { return forgiving; }
+
     // Advance by numSamples of real time, writing instrument MIDI at sample offsets.
     void render (juce::MidiBuffer& out, int numSamples, double sampleRate);
 
@@ -80,6 +86,8 @@ public:
     PitchSet satisfiedPitches() const noexcept { return satisfied; }
     double   nextGroupTime() const noexcept;
     int      getGroupsCompleted() const noexcept { return groupsCompleted; }
+    int      getGroupsSkipped() const noexcept { return groupsSkipped; }
+    PitchSet lastSkippedPitches() const noexcept { return lastSkipped; }
 
     // Pitches reserved as jump keys (never count as playing).
     PitchSet jumpKeys() const noexcept;
@@ -90,6 +98,8 @@ private:
     void sendControllerStateAt (juce::MidiBuffer& out, int sampleOffset, double t);
     void emitRange (juce::MidiBuffer& out, double from, double to, double startSample, double samplesPerSongSecond);
     bool gateOpen() const noexcept;
+    void decided (bool played);    // record a chord as played or skipped, and move past it
+    void skipIfMostlyRight();
     double endTime() const noexcept;
 
     std::shared_ptr<const Song> song;
@@ -113,6 +123,12 @@ private:
     size_t nextGroup   = 0; // next chord learn mode waits for
     PitchSet satisfied;
     int groupsCompleted = 0;
+
+    bool     forgiving = false;
+    unsigned history   = 0; // last 10 decided chords, newest in bit 0, 1 = played
+    double   waited    = 0.0; // real seconds spent at the current chord
+    int      groupsSkipped = 0;
+    PitchSet lastSkipped;
 
     std::vector<int> sounding; // indices of notes we've sent note-on for
     int blockSamples = 0;
