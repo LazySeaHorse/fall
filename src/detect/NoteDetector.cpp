@@ -116,6 +116,7 @@ struct NoteDetector::Impl
     // tuning (cents from A440), learned from clear notes
     float tuningCents = 0;
     int   tuningCount = 0;
+    std::array<float, 15> tuningSeen {}; // the latest notes' offsets
 
     std::atomic<float> levelDb { -100.0f }, floorOut { -100.0f }, tuningOut { 0.0f };
     std::atomic<bool>  tuningSure { false };
@@ -330,10 +331,13 @@ struct NoteDetector::Impl
     {
         if (key < 48 || key > 84) // the extremes are stretched; the middle tells the tuning
             return;
-        const float c = (midi - (float) key) * 100.0f;
-        ++tuningCount;
-        tuningCents += (c - tuningCents) / (float) std::min (tuningCount, 10);
-        tuningCents = std::clamp (tuningCents, -50.0f, 50.0f);
+        // Offset from the nearest A440 semitone (not from `key`, which was chosen with the current
+        // estimate and would reinforce it). The median ignores attacks that read sharp.
+        tuningSeen[(size_t) (tuningCount++ % (int) tuningSeen.size())] = (midi - std::round (midi)) * 100.0f;
+        std::array<float, 15> v = tuningSeen;
+        const auto n = (size_t) std::min (tuningCount, (int) v.size());
+        std::nth_element (v.begin(), v.begin() + (std::ptrdiff_t) (n / 2), v.begin() + (std::ptrdiff_t) n);
+        tuningCents = v[n / 2];
         tuningOut.store (tuningCents, std::memory_order_relaxed);
         tuningSure.store (tuningCount >= 5, std::memory_order_relaxed);
     }
