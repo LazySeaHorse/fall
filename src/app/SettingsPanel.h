@@ -13,10 +13,10 @@ public:
     // ---- wired by MainComponent ----
     std::function<void (int index)> onInstrumentChosen; // 0 = built-in, 1.. = instruments list
     std::function<void()> onRescan, onAddPluginFile, onShowInstrumentWindow, onAudioSettings, onClose, onSaveRecording;
-    std::function<void (bool)> onMicEnabled, onShowNames, onPlayMyPart, onRawMic, onForgiving;
+    std::function<void (bool)> onMicEnabled, onShowNames, onPlayMyPart, onRawMic;
     std::function<juce::String()> getTuningText;
     std::function<void (double)> onSensitivity, onEarlyWindow, onLookahead, onVolume, onJumpLeadIn;
-    std::function<void (int)> onSplitPitch;
+    std::function<void (int)> onSplitPitch, onLearnStyle; // 0 wait for every note, 1 mostly right, 2 while I play
     std::function<float()> getInputLevelDb;
 
     SettingsPanel()
@@ -67,9 +67,15 @@ public:
         hint (p, "Saves the last 90 seconds from the microphone, with what Fall expected and heard, for tracking down missed notes.");
 
         header (p, "Learn mode");
-        addRow (p, "Keep going if mostly right", forgiving);
-        forgiving.onToggle = [this] (bool b) { if (onForgiving) onForgiving (b); };
-        hint (p, "Skips a chord you haven't played after half a second, if you got 8 of the last 10. Never two in a row. Off: wait for every note.");
+        addRow (p, "When I miss a note", learnStyle);
+        learnStyle.addItem ("Wait for it", 1);
+        learnStyle.addItem ("Keep going if mostly right", 2);
+        learnStyle.addItem ("Keep going while I play", 3);
+        learnStyle.onChange = [this] {
+            showLearnStyleHint();
+            if (! updating && onLearnStyle) onLearnStyle (learnStyle.getSelectedItemIndex());
+        };
+        hint (p, learnStyleHint);
         addRow (p, "Early tolerance", earlyWindow);
         setupSlider (earlyWindow, 0.0, 0.6, 0.01, [this] (double v) { if (onEarlyWindow) onEarlyWindow (v); });
         earlyWindow.textFromValueFunction = [] (double v) { return juce::String (juce::roundToInt (v * 1000)) + " ms"; };
@@ -106,7 +112,7 @@ public:
         updating = false;
     }
 
-    void setValues (double vol, bool playMine, bool mic, double sens, double early, double lead, int split, bool names, double look, bool forgive)
+    void setValues (double vol, bool playMine, bool mic, double sens, double early, double lead, int split, bool names, double look, int learnStyleIndex)
     {
         volume.setValue (vol, juce::dontSendNotification);
         playMyPart.setToggled (playMine);
@@ -117,7 +123,10 @@ public:
         splitPitch.setValue (split, juce::dontSendNotification);
         showNames.setToggled (names);
         lookahead.setValue (look, juce::dontSendNotification);
-        forgiving.setToggled (forgive);
+        updating = true;
+        learnStyle.setSelectedItemIndex (learnStyleIndex, juce::dontSendNotification);
+        updating = false;
+        showLearnStyleHint();
     }
 
     void setRawMic (bool b) { rawMic.setToggled (b); }
@@ -266,14 +275,25 @@ private:
     std::vector<Item> items;
     bool updating = false;
 
-    juce::ComboBox instrument;
+    juce::ComboBox instrument, learnStyle;
     juce::TextButton rescan, addFile, showWindow, audio, saveRecording;
     juce::Label tuning;
     int tuningFrames = 0;
     juce::Slider volume, sensitivity, earlyWindow, lookahead, jumpLeadIn, splitPitch;
-    Switch playMyPart, micEnabled, showNames, rawMic, forgiving;
+    Switch playMyPart, micEnabled, showNames, rawMic;
     Meter meter;
     juce::Label* instrumentHint = nullptr;
+    juce::Label* learnStyleHint = nullptr;
+
+    void showLearnStyleHint()
+    {
+        static const char* const text[] = {
+            "The song waits at every chord until you play it.",
+            "Skips a chord you haven't played after half a second, if you got 8 of the last 10. Never two in a row.",
+            "The song runs while you play anything and stops when you stop. Any key sets it going again." };
+        if (learnStyleHint != nullptr)
+            learnStyleHint->setText (text[juce::jlimit (0, 2, learnStyle.getSelectedItemIndex())], juce::dontSendNotification);
+    }
 
     struct CloseButton : Pressable
     {
