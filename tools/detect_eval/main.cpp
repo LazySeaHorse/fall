@@ -50,13 +50,11 @@ struct Options
     int    block = 480;       // samples per process() call (0 = pseudo-random 128..1024)
     float  sens = 0.6f;
     double timeout = 1.0;     // learn mode: give up on a chord this long after its last note
-    juce::File csvOut, makeCal;
-    juce::File calibration;
+    juce::File csvOut;
     bool   learn = true, wrong = true, display = true;
     bool   perFile = true;
     double resample = 0.0;    // pretend the recording has this sample rate (for testing only)
     bool   verbose = false;
-    std::vector<std::pair<juce::String, float>> params; // --param name=value (tuning overrides)
 };
 
 struct Truth
@@ -248,22 +246,9 @@ void setup (NoteDetector& det, double rate, const Options& opt)
 {
     det.prepare (rate, 2048);
     det.setSensitivity (opt.sens);
-    for (auto& [name, value] : opt.params)
-        if (! det.setTuningOverride (name, value))
-            std::fprintf (stderr, "unknown parameter %s\n", name.toRawUTF8());
     PitchSet w;
     w.set (21); w.set (23); w.set (108);
     det.setWatchKeys (w);
-    if (opt.calibration.existsAsFile())
-    {
-        juce::MemoryBlock mb;
-        opt.calibration.loadFileAsData (mb);
-        Calibration c;
-        if (c.fromBinary (mb))
-            det.setCalibration (c);
-        else
-            std::fprintf (stderr, "warning: could not read calibration %s\n", opt.calibration.getFullPathName().toRawUTF8());
-    }
 }
 
 double groupLastStart (const Song& s, const NoteGroup& g)
@@ -347,7 +332,8 @@ void runLearn (const std::vector<float>& audio, double rate, const Truth& tr, co
             for (int idx : grp.notes)
             {
                 const auto& n = S.notes[(size_t) idx];
-                if (noteDone[(size_t) idx] || ! e.exp.test ((size_t) n.pitch))
+                // like the app: one heard note of a chord completes the chord
+                if (noteDone[(size_t) idx] || ! e.exp.any())
                     continue;
                 noteDone[(size_t) idx] = true;
                 satisfied.set ((size_t) n.pitch);
@@ -609,49 +595,6 @@ void dumpCsv (const juce::File& f, const std::vector<Event>& evs)
     f.replaceWithText (os.str());
 }
 
-// Builds a calibration file from a recording in which every key is played once (e.g. scale.wav):
-// arms a capture shortly before each key's first strike, stores the fingerprint when it finishes.
-bool makeCalibration (const std::vector<float>& audio, double rate, const Truth& tr, const Options& opt, const juce::File& out)
-{
-    NoteDetector det;
-    setup (det, rate, opt);
-    Calibration cal;
-    std::vector<DetectedOnset> buf (64);
-    size_t pos = 0;
-    int stored = 0, tried = 0;
-    PitchSet done;
-    for (auto& n : tr.song.notes)
-    {
-        if (done.test ((size_t) n.pitch))
-            continue;
-        done.set ((size_t) n.pitch);
-        ++tried;
-        const size_t armAt = (size_t) std::max (0.0, (n.start - 0.25) * rate);
-        const size_t until = (size_t) ((n.start + 0.45) * rate);
-        while (pos < armAt && pos < audio.size())
-        {
-            const size_t k = std::min<size_t> (480, audio.size() - pos);
-            det.process (audio.data() + pos, (int) k, buf.data(), (int) buf.size());
-            pos += k;
-        }
-        det.beginCapture (n.pitch);
-        while (pos < until && pos < audio.size())
-        {
-            const size_t k = std::min<size_t> (480, audio.size() - pos);
-            det.process (audio.data() + pos, (int) k, buf.data(), (int) buf.size());
-            pos += k;
-        }
-        if (det.captureFinished())
-        {
-            det.storeCapture (cal);
-            ++stored;
-        }
-    }
-    std::printf ("calibration: stored %d of %d keys\n", stored, tried);
-    const auto mb = cal.toBinary();
-    return out.replaceWithData (mb.getData(), mb.getSize());
-}
-
 // False-accept test on non-piano sounds (snaps, claps, knocks ...): before every event the
 // detector is told to expect a random chord; any expected hit near the event is a false accept.
 void runTransients (const std::vector<float>& audio, double rate, const juce::File& eventsCsv, const Options& opt)
@@ -782,7 +725,7 @@ void usage()
 {
     std::puts ("usage: fall_detect_eval <audio.wav> <truth.mid|csv> [<audio2> <truth2> ...] [options]\n"
                "       fall_detect_eval --dir <wavdir> --truth <truthdir> [options]   (pairs by file name; .mid or .csv)\n"
-               "options: --make-calibration <out.cal> (uses the first pair: a recording of every key played once)\n         --offset <s>  --block <n|0=random>  --sens <0..1>  --timeout <s>  --csv <file>  --calibration <file>\n"
+               "options: --offset <s>  --block <n|0=random>  --sens <0..1>  --timeout <s>  --csv <file>\n"
                "         --replay <recording.wav> <recording.csv> (a \"Save what Fall heard\" pair: what the detector reports now)\n"
                "         --transients <noises.wav> <events.csv> (false accepts on snaps/claps/knocks; see tools/detect/gen_noises.py)\n"
                "         --only learn|wrong|display (default all)  --quiet (totals only)  --names a,b,c (with --dir)");
@@ -805,17 +748,9 @@ int main (int argc, char** argv)
         else if (a == "--sens") opt.sens = next().getFloatValue();
         else if (a == "--timeout") opt.timeout = next().getDoubleValue();
         else if (a == "--csv") opt.csvOut = juce::File::getCurrentWorkingDirectory().getChildFile (next());
-        else if (a == "--make-calibration") opt.makeCal = juce::File::getCurrentWorkingDirectory().getChildFile (next());
-        else if (a == "--calibration") opt.calibration = juce::File::getCurrentWorkingDirectory().getChildFile (next());
         else if (a == "--dir") dir = juce::File::getCurrentWorkingDirectory().getChildFile (next());
         else if (a == "--truth") truthDir = juce::File::getCurrentWorkingDirectory().getChildFile (next());
         else if (a == "--names") names = juce::StringArray::fromTokens (next(), ",", "");
-        else if (a == "--param")
-        {
-            const auto kv = juce::StringArray::fromTokens (next(), "=", "");
-            if (kv.size() == 2)
-                opt.params.push_back ({ kv[0], kv[1].getFloatValue() });
-        }
         else if (a == "--quiet") opt.perFile = false;
         else if (a == "--verbose" || a == "-v") opt.verbose = true;
         else if (a == "--only")
@@ -884,20 +819,6 @@ int main (int argc, char** argv)
     {
         usage();
         return 1;
-    }
-
-    if (opt.makeCal != juce::File())
-    {
-        std::vector<float> audio;
-        double rate = 48000;
-        Truth truth;
-        juce::String err;
-        if (! loadAudio (opt.pairs[0].first, audio, rate) || ! loadTruth (opt.pairs[0].second, opt.offset, truth, err))
-        {
-            std::fprintf (stderr, "cannot load calibration source\n");
-            return 2;
-        }
-        return makeCalibration (audio, rate, truth, opt, opt.makeCal) ? 0 : 3;
     }
 
     LearnStats learnTotal;
