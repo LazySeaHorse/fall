@@ -203,10 +203,10 @@ std::shared_ptr<Song> makeChordRun()
 // Learn mode on makeChordRun(), waiting at chord 0.
 struct ChordRun : Rig
 {
-    explicit ChordRun (bool forgiving) : Rig (makeChordRun())
+    explicit ChordRun (LearnStyle style) : Rig (makeChordRun())
     {
         p.setMode (Mode::Learn);
-        p.setForgiving (forgiving);
+        p.setLearnStyle (style);
         p.setPlaying (true);
         run (0.1);
     }
@@ -215,9 +215,9 @@ struct ChordRun : Rig
     void playChords (int n) { for (int i = 0; i < n; ++i) { play(); run (0.5); } }
 };
 
-TEST_CASE ("Learn mode waits forever when not forgiving", "[player][learn][forgiving]")
+TEST_CASE ("Learn mode waits forever in wait-for-every-note style", "[player][learn][forgiving]")
 {
-    ChordRun r (false);
+    ChordRun r (LearnStyle::WaitEveryNote);
     r.playChords (9);
     REQUIRE (r.p.isWaiting());
     const int done = r.p.getGroupsCompleted();
@@ -229,7 +229,7 @@ TEST_CASE ("Learn mode waits forever when not forgiving", "[player][learn][forgi
 
 TEST_CASE ("Forgiving learn mode skips a chord after 0.5 s once 8 of 10 were played", "[player][learn][forgiving]")
 {
-    ChordRun r (true);
+    ChordRun r (LearnStyle::MostlyRight);
     r.playChords (8);
     REQUIRE (r.p.isWaiting());
     CHECK (r.p.expectedPitches() == ps ({ 68 }));
@@ -246,7 +246,7 @@ TEST_CASE ("Forgiving learn mode skips a chord after 0.5 s once 8 of 10 were pla
 
 TEST_CASE ("Forgiving learn mode never skips two chords in a row", "[player][learn][forgiving]")
 {
-    ChordRun r (true);
+    ChordRun r (LearnStyle::MostlyRight);
     r.playChords (9);
     r.run (1.0);
     CHECK (r.p.getGroupsSkipped() == 1);
@@ -261,7 +261,7 @@ TEST_CASE ("Forgiving learn mode never skips two chords in a row", "[player][lea
 
 TEST_CASE ("Forgiving learn mode needs 8 hits, also right after a seek", "[player][learn][forgiving]")
 {
-    ChordRun r (true);
+    ChordRun r (LearnStyle::MostlyRight);
     r.playChords (7);
     r.run (5.0);
     CHECK (r.p.getGroupsSkipped() == 0); // only 7 played so far

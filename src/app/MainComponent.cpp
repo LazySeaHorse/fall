@@ -180,7 +180,7 @@ MainComponent::MainComponent (const LaunchOptions& options) : opts (options), sc
     settingsPanel.onShowNames = [this] (bool b) { showNames = b; stage.setShowNoteNames (b); saveSettings(); };
     settingsPanel.onPlayMyPart = [this] (bool b) { playMyPart = b; applyHands(); saveSettings(); };
     settingsPanel.onSensitivity = [this] (double v) { sensitivity = v; engine.setSensitivity ((float) v); saveSettings(); };
-    settingsPanel.onForgiving = [this] (bool b) { forgiving = b; engine.withPlayer ([b] (Player& p) { p.setForgiving (b); }); saveSettings(); };
+    settingsPanel.onForgiving = [this] (bool b) { forgiving = b; engine.withPlayer ([b] (Player& p) { p.setLearnStyle (b ? LearnStyle::MostlyRight : LearnStyle::WaitEveryNote); }); saveSettings(); };
     settingsPanel.onEarlyWindow = [this] (double v) { earlyWindow = v; engine.withPlayer ([v] (Player& p) { p.setEarlyWindow (v); }); saveSettings(); };
     settingsPanel.onJumpLeadIn = [this] (double v) { jumpLeadIn = v; engine.withPlayer ([v] (Player& p) { p.setJumpLeadIn (v); }); saveSettings(); };
     settingsPanel.onLookahead = [this] (double v) { lookahead = v; stage.setLookahead (v); saveSettings(); };
@@ -1037,7 +1037,7 @@ void MainComponent::restoreSettings()
     engine.setMicEnabled (micOn);
     engine.setRawMicrophone (rawMic);
     settingsPanel.setRawMic (rawMic);
-    engine.withPlayer ([this] (Player& p) { p.setForgiving (forgiving); });
+    engine.withPlayer ([this] (Player& p) { p.setLearnStyle (forgiving ? LearnStyle::MostlyRight : LearnStyle::WaitEveryNote); });
     engine.setMasterGain ((float) volume);
     engine.setSensitivity ((float) sensitivity);
     micButton.setToggled (micOn);

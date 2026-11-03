@@ -15,7 +15,7 @@ void Player::setSong (std::shared_ptr<const Song> s)
     loop = {};
     loopPass = 0;
     playing = false;
-    groupsCompleted = groupsSkipped = 0;
+    groupsCompleted = groupsSkipped = groupsPassed = 0;
     groups = song ? buildGroups (*song, practiceHands) : std::vector<NoteGroup> {};
     time = song ? std::max (kMinTime, song->firstNoteTime() - 2.0) : 0.0;
     needsResync = true;
@@ -87,10 +87,22 @@ PitchSet Player::jumpKeys() const noexcept
     return keys;
 }
 
-void Player::setForgiving (bool on)
+void Player::setLearnStyle (LearnStyle s)
 {
-    forgiving = on;
+    style = s;
     history = 0;
+    lastHeard = kNever;
+    lastPassed = clock;
+}
+
+void Player::heardSomething()
+{
+    lastHeard = clock;
+    if (style == LearnStyle::WhilePlaying && isWaiting())
+    {
+        ++groupsPassed;
+        decided (false);
+    }
 }
 
 void Player::resync()
@@ -98,6 +110,8 @@ void Player::resync()
     satisfied.reset();
     history = 0;
     waited = 0.0;
+    lastHeard = kNever;
+    lastPassed = clock;
     if (! song) { nextNote = nextControl = nextGroup = 0; return; }
 
     nextNote = song->firstNoteAtOrAfter (time);
@@ -163,12 +177,18 @@ void Player::decided (bool played)
     ++nextGroup;
     satisfied.reset();
     waited = 0.0;
+    lastPassed = clock;
+}
+
+bool Player::mayPassWhilePlaying() const noexcept
+{
+    return style == LearnStyle::WhilePlaying && lastHeard >= std::min (clock - 1.5, lastPassed - 0.3);
 }
 
 void Player::skipIfMostlyRight()
 {
     const bool lastWasHit = (history & 1u) != 0;
-    if (forgiving && waited >= 0.5 - 1e-9 && lastWasHit && std::popcount (history) >= 8)
+    if (style == LearnStyle::MostlyRight && waited >= 0.5 - 1e-9 && lastWasHit && std::popcount (history) >= 8)
     {
         lastSkipped = groups[nextGroup].pitches;
         ++groupsSkipped;
@@ -272,6 +292,7 @@ void Player::render (juce::MidiBuffer& out, int numSamples, double sampleRate)
         return;
 
     blockSamples = numSamples;
+    clock += numSamples / sampleRate;
 
     if (needsResync)
     {
@@ -313,6 +334,12 @@ void Player::render (juce::MidiBuffer& out, int numSamples, double sampleRate)
 
         if (stop == Stop::Gate)
         {
+            if (mayPassWhilePlaying())
+            {
+                ++groupsPassed;
+                decided (false);
+                continue; // on to the next chord
+            }
             if (waited == 0.0)
                 waited = (numSamples - sample) / sampleRate; // the rest of this block is already waiting
             break; // hold here until notePlayed() opens the gate

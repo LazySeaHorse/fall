@@ -9,6 +9,14 @@ namespace fall
 
 enum class Mode { Freeplay, Learn };
 
+// What learn mode does when the player doesn't play the chord the song is waiting at.
+enum class LearnStyle
+{
+    WaitEveryNote, // hold at every chord until it is played
+    MostlyRight,   // skip a chord (as missed) when most of the last ones were played
+    WhilePlaying   // play along: keep going while the player plays anything, stop when they stop
+};
+
 struct LoopSettings
 {
     bool   enabled     = false;
@@ -67,11 +75,16 @@ public:
     // How early (real seconds) a correct note may be played before its chord reaches the key line.
     void setEarlyWindow (double realSeconds) { earlyWindow = realSeconds; }
 
-    // Learn mode "keep going if mostly right": a chord you haven't played is skipped (and counted as
-    // missed) once the song has waited 0.5 s at it, if 8 of the last 10 chords were played and the
-    // one before this was too. Off: wait for every chord.
-    void setForgiving (bool on);
-    bool isForgiving() const noexcept { return forgiving; }
+    // MostlyRight: a chord you haven't played is skipped (and counted as missed) once the song has
+    // waited 0.5 s at it, if 8 of the last 10 chords were played and the one before this was too.
+    // WhilePlaying: the song passes a chord (not counted as missed) if something was played within
+    // 1.5 s, or since just before the previous chord, otherwise it waits for any key.
+    void setLearnStyle (LearnStyle s);
+    LearnStyle getLearnStyle() const noexcept { return style; }
+
+    // Something (anything but a jump key) was struck on the real piano. WhilePlaying: resumes a
+    // song that is waiting at a chord.
+    void heardSomething();
 
     // Advance by numSamples of real time, writing instrument MIDI at sample offsets.
     void render (juce::MidiBuffer& out, int numSamples, double sampleRate);
@@ -87,6 +100,7 @@ public:
     double   nextGroupTime() const noexcept;
     int      getGroupsCompleted() const noexcept { return groupsCompleted; }
     int      getGroupsSkipped() const noexcept { return groupsSkipped; }
+    int      getGroupsPassed() const noexcept { return groupsPassed; }
     PitchSet lastSkippedPitches() const noexcept { return lastSkipped; }
 
     // Pitches reserved as jump keys (never count as playing).
@@ -100,6 +114,7 @@ private:
     bool gateOpen() const noexcept;
     void decided (bool played);    // record a chord as played or skipped, and move past it
     void skipIfMostlyRight();
+    bool mayPassWhilePlaying() const noexcept;
     double endTime() const noexcept;
 
     std::shared_ptr<const Song> song;
@@ -124,11 +139,18 @@ private:
     PitchSet satisfied;
     int groupsCompleted = 0;
 
-    bool     forgiving = false;
+    LearnStyle style = LearnStyle::WaitEveryNote;
     unsigned history   = 0; // last 10 decided chords, newest in bit 0, 1 = played
     double   waited    = 0.0; // real seconds spent at the current chord
     int      groupsSkipped = 0;
     PitchSet lastSkipped;
+
+    // WhilePlaying: real-time clock and when we last heard a key / passed a chord on it.
+    static constexpr double kNever = -1e9;
+    double clock      = 0.0;
+    double lastHeard  = kNever;
+    double lastPassed = 0.0;
+    int    groupsPassed = 0; // chords passed without being played
 
     std::vector<int> sounding; // indices of notes we've sent note-on for
     int blockSamples = 0;
