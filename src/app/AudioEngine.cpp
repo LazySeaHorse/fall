@@ -127,8 +127,9 @@ void AudioEngine::processBlock (const float* const* inputs, int numIn, float* co
                 HeardEvent e;
                 e.pitches  = o.pitches | o.expectedHits | o.watchHits;
                 e.accepted = o.expectedHits | o.watchHits;
+                // The detector hears one note at a time, so one note of a chord completes the chord.
                 if (e.accepted.any())
-                    e.marker = player.notePlayed (e.accepted);
+                    e.marker = player.notePlayed (o.expectedHits.any() ? (player.expectedPitches() | o.watchHits) : o.watchHits);
                 e.wallMs    = juce::Time::getMillisecondCounterHiRes();
                 e.latencyMs = (float) (1000.0 * (double) (o.reportedAt - o.samplePosition) / sampleRate);
                 pushHeard (e);
