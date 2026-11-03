@@ -27,6 +27,8 @@ namespace
     constexpr double kFloorUpDbPerSec = 1.0;         // room level estimate: rises slowly...
     constexpr double kFloorDownDbPerSec = 10.0;      // ...and falls quickly
     constexpr float  kSnap = 0.65f;                   // semitones, see keyFor()
+    constexpr float  kNewSoundDb = 9.0f;              // a new note adds this much at its fundamental
+    constexpr double kPi = 3.14159265358979323846;
     constexpr int    kHist = 16;                     // hop levels kept for the strike test
 
     float toDb (double power) noexcept { return (float) (10.0 * std::log10 (power + 1e-12)); }
@@ -36,7 +38,7 @@ namespace
         float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
         void set (double hz, double fs)
         {
-            const double w = 2.0 * 3.14159265358979323846 * hz / fs, cw = std::cos (w), al = std::sin (w) / (2.0 * 0.7071);
+            const double w = 2.0 * kPi * hz / fs, cw = std::cos (w), al = std::sin (w) / (2.0 * 0.7071);
             const double a0 = 1.0 + al;
             b0 = (float) ((1.0 + cw) / 2.0 / a0); b1 = (float) (-(1.0 + cw) / a0); b2 = b0;
             a1 = (float) (-2.0 * cw / a0); a2 = (float) ((1.0 - al) / a0);
@@ -81,6 +83,7 @@ struct NoteDetector::Impl
     aubio_pitch_t* pitch = nullptr;
     fvec_t* pitchIn = nullptr;
     fvec_t* pitchOut = nullptr;
+    std::vector<float> hann;  // pitch window, for fundamentalDb()
     HighPass hpLevel, hpAttack; // 60 Hz (level without rumble), 2 kHz (hammer noise)
 
     // ---- settings ----
@@ -92,6 +95,8 @@ struct NoteDetector::Impl
 
     // ---- state ----
     std::vector<float> hopBuf;
+    std::vector<float> ring;  // the last ~1.4 s at the pitch tracker's rate
+    int64_t ringPos = 0;
     int     hopFill = 0;
     int64_t pos = 0;     // samples consumed
     int64_t hopIdx = 0;
@@ -110,6 +115,7 @@ struct NoteDetector::Impl
     int64_t  strikeHop = 0, strikePos = 0;
     float    strikeStrength = 0;
     float    strikeLevel = 0;
+    float    strikeHammer = 0; // steepest 10 ms jump above 2 kHz around the strike
     int64_t  reportPos = -100000000; // strike position of the latest report
     int      reportKey = -1;
     int      prevKey = -1;   // the note that was already sounding before the strike
@@ -155,6 +161,9 @@ struct NoteDetector::Impl
         pitchIn = new_fvec ((uint_t) (hop / decim));
         pitchOut = new_fvec (1);
         hopBuf.assign ((size_t) hop, 0.0f);
+        ring.assign (65536, 0.0f);
+        hann.resize ((size_t) win);
+        for (int i = 0; i < win; ++i) hann[(size_t) i] = (float) (0.5 - 0.5 * std::cos (2.0 * kPi * i / win));
 
         hpLevel.set (60.0, fs);
         hpAttack.set (2000.0, fs);
@@ -183,6 +192,7 @@ struct NoteDetector::Impl
     void reset()
     {
         hopFill = 0; pos = 0; hopIdx = 0;
+        std::fill (ring.begin(), ring.end(), 0.0f); ringPos = 0;
         hpLevel.z1 = hpLevel.z2 = hpAttack.z1 = hpAttack.z2 = 0;
         level = {}; attack = {};
         floorDb = -100.0f; floorSet = false;
@@ -215,6 +225,7 @@ struct NoteDetector::Impl
             float sum = 0.0f;
             for (int k = 0; k < decim; ++k) sum += hopBuf[(size_t) (i * decim + k)];
             pitchIn->data[i] = sum / (float) decim;
+            ring[(size_t) (ringPos++ & (int64_t) (ring.size() - 1))] = pitchIn->data[i];
         }
         level.put (hopIdx, p / hop);
         attack.put (hopIdx, a / hop);
@@ -263,6 +274,7 @@ struct NoteDetector::Impl
         {
             if (! pending) prevKey = runLen >= needHops ? keyFor (runMidi) : lastKey;
             startStrike (pos - hop, fast);
+            strikeHammer = std::max (hammer, attack.db (hopIdx - 1, 1) - attack.db (hopIdx - 3, 1));
             runLen = 0; // only pitch heard after the strike counts
         }
         // Legato: a new key can start without a clear jump in level (the old note was still loud).
@@ -278,6 +290,7 @@ struct NoteDetector::Impl
             {
                 prevKey = lastKey;
                 startStrike (at, fast);
+                strikeHammer = 0;
             }
             if (key >= 0) lastKey = key;
         }
@@ -286,19 +299,31 @@ struct NoteDetector::Impl
 
         if (pending)
         {
+            strikeHammer = std::max (strikeHammer, hammer);
             const int64_t since = hopIdx - strikeHop;
             if (since > deadlineHops)
                 pending = false;
             else if (runLen >= needHops)
             {
                 const int key = keyFor (runMidi);
-                // the note that was already sounding, still in the pitch window
-                const bool stale = key == prevKey && since < earlyHops;
+                // the note that was already sounding, still in the pitch window (a full window for
+                // the same key: a new note under it can take that long to win)
+                const bool stale = echoOf (key, prevKey) && since < (key == prevKey ? 2 : 1) * earlyHops;
+                // The same key again needs a hammer: strings beating, the pedal or a finger on a key
+                // make it swell too. An octave or twelfth of it needs new sound at its fundamental:
+                // a decaying note can read as one.
+                const bool heard = key == prevKey ? strikeHammer >= riseDb
+                                 : ! echoOf (key, prevKey) || fundamentalDb (runMidi, ringPos) - fundamentalDb (runMidi, strikePos / decim) >= kNewSoundDb;
                 // the same key right after its report: that strike's level rising in steps, not a new one
                 const bool sameStrike = key == reportKey && strikePos - reportPos < (int64_t) (kSameKeySecs * fs);
                 const bool isWatch = key >= 0 && watch.test ((size_t) key);
                 if (sameStrike && ! stale)
                     pending = false;
+                else if (! stale && ! heard)
+                {
+                    pending = false; // only the old note; the hammer may still be coming
+                    lastStrikePos = -100000000;
+                }
                 else if (key >= 0 && ! stale && (! isWatch || runLen >= needWatchHops))
                 {
                     pending = false; // one note per strike
@@ -323,6 +348,29 @@ struct NoteDetector::Impl
        #ifdef FALL_DETECT_TRACE
         std::fprintf (stderr, "[strike] at %.3f (now %.3f) level %.1f floor %.1f prev %d\n", (double) strikePos / fs, (double) pos / fs, fast, floorDb, prevKey);
        #endif
+    }
+
+    // Level at the pitch `midi` in the pitch window ending at `end` (a sample of the ring).
+    float fundamentalDb (float midi, int64_t end) const
+    {
+        const int n = (int) hann.size();
+        const double c = 2.0 * std::cos (2.0 * kPi * 440.0 * std::pow (2.0, (midi - 69.0) / 12.0) * decim / fs);
+        double s1 = 0, s2 = 0;
+        const int64_t mask = (int64_t) ring.size() - 1;
+        for (int i = 0; i < n; ++i)
+        {
+            const double s = hann[(size_t) i] * ring[(size_t) ((end - n + i) & mask)] + c * s1 - s2;
+            s2 = s1; s1 = s;
+        }
+        return toDb (s1 * s1 + s2 * s2 - c * s1 * s2);
+    }
+
+    // The same note, or how the pitch tracker can misread it as it decays: an octave, or a
+    // twelfth / octave+twelfth below.
+    static bool echoOf (int key, int of)
+    {
+        const int d = of - key;
+        return of >= 0 && key >= 0 && (d % 12 == 0 || d == 19 || d == 31);
     }
 
     // The key for a measured pitch: the nearest key, or an expected key if the pitch is within
