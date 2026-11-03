@@ -122,6 +122,47 @@ TEST_CASE ("repeated notes: the same key struck again while ringing is a new hit
     CHECK (std::count_if (rs.begin(), rs.end(), [] (const Report& r) { return r.onset.pitches.test (72); }) == 3);
 }
 
+TEST_CASE ("a finger's thump just before the hammer does not hide a repeated note", "[detect]")
+{
+    // G5 fades; the same key is struck again at 2.0 s, and the finger hits the key bed 100 ms earlier
+    Environment env;
+    auto audio = renderScene ({ { 79, 1.0, 0.8, 0.7f }, { 79, 2.0, 0.8, 0.7f } }, 3.5, env);
+    float peak = 0;
+    for (size_t i = (size_t) (1.0 * env.sampleRate); i < (size_t) (1.2 * env.sampleRate); ++i) peak = std::max (peak, std::abs (audio[i]));
+    Rng rng (7);
+    float lp = 0;
+    for (int k = 0; k < (int) (0.06 * env.sampleRate); ++k) // a low thud, ~300 Hz, 15 ms decay
+    {
+        lp += 0.04f * (rng.gauss() - lp);
+        audio[(size_t) (1.90 * env.sampleRate) + (size_t) k] += 2.5f * peak * lp * (float) std::exp (-(double) k / env.sampleRate / 0.015);
+    }
+    NoteDetector det;
+    det.prepare (env.sampleRate, kBlock);
+    det.setSensitivity (0.6f);
+    det.setExpected (setOf ({ 79 }));
+    const auto rs = stream (det, audio, env.sampleRate, kBlock);
+    CHECK (std::count_if (rs.begin(), rs.end(), [] (const Report& r) { return r.onset.pitches.test (79); }) == 2);
+    CHECK (std::any_of (rs.begin(), rs.end(), [] (const Report& r) { return r.onset.pitches.test (79) && std::abs (r.onsetTime - 2.0) < 0.03; }));
+}
+
+TEST_CASE ("a ringing note that swells is not a new note", "[detect]")
+{
+    // strings beating, or the room: the level of a ringing C5 creeps up 9 dB over 60 ms and back
+    Environment env;
+    auto audio = renderScene ({ { 72, 1.0, 3.0, 0.7f } }, 4.0, env);
+    for (size_t i = 0; i < audio.size(); ++i)
+    {
+        const double t = (double) i / env.sampleRate - 2.0;
+        const double db = t < 0 ? 0 : t < 0.06 ? 9.0 * t / 0.06 : t < 0.3 ? 9.0 : t < 0.5 ? 9.0 * (0.5 - t) / 0.2 : 0;
+        audio[i] *= (float) std::pow (10.0, db / 20.0);
+    }
+    NoteDetector det;
+    det.prepare (env.sampleRate, kBlock);
+    det.setSensitivity (0.6f);
+    det.setExpected (setOf ({ 72 }));
+    CHECK (stream (det, audio, env.sampleRate, kBlock).size() == 1);
+}
+
 TEST_CASE ("a new note over a ringing one is heard as the new note", "[detect]")
 {
     // left hand C3 rings, right hand plays E5 on top
