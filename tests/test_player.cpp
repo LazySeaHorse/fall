@@ -187,6 +187,94 @@ TEST_CASE ("Notes played slightly early count", "[player][learn]")
     CHECK (r.onAt (72) == 500); // played on time, never stopped
 }
 
+// 14 single-note chords, one every 0.5 s, pitches 60..73.
+std::shared_ptr<Song> makeChordRun()
+{
+    auto s = std::make_shared<Song>();
+    for (int i = 0; i < 14; ++i)
+    {
+        Note n; n.pitch = 60 + i; n.start = 0.5 * i; n.end = 0.5 * i + 0.3; n.hand = Hand::Right;
+        s->notes.push_back (n);
+    }
+    s->length = 7.0;
+    return s;
+}
+
+// Learn mode on makeChordRun(), waiting at chord 0.
+struct ChordRun : Rig
+{
+    explicit ChordRun (bool forgiving) : Rig (makeChordRun())
+    {
+        p.setMode (Mode::Learn);
+        p.setForgiving (forgiving);
+        p.setPlaying (true);
+        run (0.1);
+    }
+
+    void play() { p.notePlayed (p.expectedPitches()); run (0.1); }
+    void playChords (int n) { for (int i = 0; i < n; ++i) { play(); run (0.5); } }
+};
+
+TEST_CASE ("Learn mode waits forever when not forgiving", "[player][learn][forgiving]")
+{
+    ChordRun r (false);
+    r.playChords (9);
+    REQUIRE (r.p.isWaiting());
+    const int done = r.p.getGroupsCompleted();
+    r.run (10.0);
+    CHECK (r.p.isWaiting());
+    CHECK (r.p.getGroupsCompleted() == done);
+    CHECK (r.p.getGroupsSkipped() == 0);
+}
+
+TEST_CASE ("Forgiving learn mode skips a chord after 0.5 s once 8 of 10 were played", "[player][learn][forgiving]")
+{
+    ChordRun r (true);
+    r.playChords (8);
+    REQUIRE (r.p.isWaiting());
+    CHECK (r.p.expectedPitches() == ps ({ 68 }));
+
+    r.run (0.3);
+    CHECK (r.p.getGroupsSkipped() == 0); // not yet 0.5 s
+    CHECK (r.p.isWaiting());
+    r.run (0.3);
+    CHECK (r.p.getGroupsSkipped() == 1);
+    CHECK (r.p.getGroupsCompleted() == 8);
+    CHECK (r.p.lastSkippedPitches() == ps ({ 68 }));
+    CHECK (r.p.expectedPitches() == ps ({ 69 })); // the song moved on to the next chord
+}
+
+TEST_CASE ("Forgiving learn mode never skips two chords in a row", "[player][learn][forgiving]")
+{
+    ChordRun r (true);
+    r.playChords (9);
+    r.run (1.0);
+    CHECK (r.p.getGroupsSkipped() == 1);
+    r.run (5.0); // the next chord is not forgiven right after a miss
+    CHECK (r.p.getGroupsSkipped() == 1);
+    CHECK (r.p.isWaiting());
+
+    r.play(); // a hit makes the one after skippable again
+    r.run (1.0);
+    CHECK (r.p.getGroupsSkipped() == 2);
+}
+
+TEST_CASE ("Forgiving learn mode needs 8 hits, also right after a seek", "[player][learn][forgiving]")
+{
+    ChordRun r (true);
+    r.playChords (7);
+    r.run (5.0);
+    CHECK (r.p.getGroupsSkipped() == 0); // only 7 played so far
+
+    r.p.seek (0.0); // history starts over
+    r.playChords (7);
+    r.run (5.0);
+    CHECK (r.p.getGroupsSkipped() == 0);
+    r.play(); // the 8th hit since the seek
+    r.run (1.0);
+    CHECK (r.p.getGroupsSkipped() == 1);
+}
+
 TEST_CASE ("Freeplay ignores what's played", "[player]")
 {
     Rig r;
