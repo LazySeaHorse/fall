@@ -275,6 +275,120 @@ TEST_CASE ("Forgiving learn mode needs 8 hits, also right after a seek", "[playe
     CHECK (r.p.getGroupsSkipped() == 1);
 }
 
+TEST_CASE ("Wait-for-every-note ignores keys that are not the chord", "[player][learn][whileplaying]")
+{
+    ChordRun r (LearnStyle::WaitEveryNote);
+    r.p.heardSomething();
+    r.run (5.0);
+    CHECK (r.p.isWaiting());
+    CHECK (r.p.getGroupsPassed() == 0);
+}
+
+TEST_CASE ("Keep going while I play passes chords as long as onsets keep coming", "[player][learn][whileplaying]")
+{
+    ChordRun r (LearnStyle::WhilePlaying);
+    REQUIRE (r.p.isWaiting()); // nothing heard yet
+    r.p.heardSomething();      // any key starts it
+    for (int i = 0; i < 10; ++i)
+    {
+        r.run (0.5);
+        r.p.heardSomething();
+    }
+    CHECK_FALSE (r.p.isWaiting());
+    CHECK_THAT (r.p.getTime(), WithinAbs (5.0, 0.01));
+    CHECK (r.p.getGroupsPassed() >= 10);
+    CHECK (r.p.getGroupsSkipped() == 0); // passing is not missing
+    CHECK (r.p.getGroupsCompleted() == 0);
+}
+
+TEST_CASE ("Keep going while I play stops 1.5 s after the last key", "[player][learn][whileplaying]")
+{
+    ChordRun r (LearnStyle::WhilePlaying);
+    r.p.heardSomething();
+    r.run (10.0);
+    REQUIRE (r.p.isWaiting());
+    CHECK (r.p.getTime() > 1.0);
+    CHECK (r.p.getTime() < 2.5);
+    CHECK (r.p.getGroupsPassed() >= 2);
+    CHECK (r.p.getGroupsPassed() <= 4);
+    const double stoppedAt = r.p.getTime();
+    r.run (5.0);
+    CHECK (r.p.getTime() == stoppedAt);
+}
+
+TEST_CASE ("Keep going while I play never stops in a slow passage with one key per chord", "[player][learn][whileplaying]")
+{
+    auto s = std::make_shared<Song>();
+    for (int i = 0; i < 5; ++i)
+    {
+        Note n; n.pitch = 60 + i; n.start = 3.0 * i; n.end = 3.0 * i + 1.0; n.hand = Hand::Right;
+        s->notes.push_back (n);
+    }
+    s->length = 13.0;
+    Rig r (s);
+    r.p.setMode (Mode::Learn);
+    r.p.setLearnStyle (LearnStyle::WhilePlaying);
+    r.p.setPlaying (true);
+    r.run (0.1);
+    r.p.heardSomething(); // the first chord
+    for (int i = 0; i < 4; ++i)
+    {
+        r.run (3.05); // the next chord comes and goes, then a key a bit after it
+        CHECK_FALSE (r.p.isWaiting());
+        r.p.heardSomething();
+    }
+    CHECK (r.p.getGroupsPassed() == 5);
+
+    // Without further keys it stops at the second chord after the last one heard.
+    Rig q (s);
+    q.p.setMode (Mode::Learn);
+    q.p.setLearnStyle (LearnStyle::WhilePlaying);
+    q.p.setPlaying (true);
+    q.run (0.1);
+    q.p.heardSomething();
+    q.run (10.0);
+    CHECK (q.p.isWaiting());
+    CHECK (q.p.getGroupsPassed() == 2);
+}
+
+TEST_CASE ("Any key resumes a stopped song while playing along", "[player][learn][whileplaying]")
+{
+    ChordRun r (LearnStyle::WhilePlaying);
+    r.run (3.0);
+    REQUIRE (r.p.isWaiting());
+    const PitchSet stuckAt = r.p.expectedPitches();
+    r.p.heardSomething();
+    CHECK (r.p.expectedPitches() != stuckAt); // moved on at once
+    CHECK (r.p.getGroupsPassed() == 1);
+    CHECK (r.p.getGroupsSkipped() == 0);
+    r.run (0.5);
+    CHECK_FALSE (r.p.isWaiting()); // and keeps going for a while
+}
+
+TEST_CASE ("Keep going while I play still completes a chord that is played", "[player][learn][whileplaying]")
+{
+    ChordRun r (LearnStyle::WhilePlaying);
+    r.p.notePlayed (r.p.expectedPitches());
+    r.p.heardSomething(); // the engine reports the same strike
+    CHECK (r.p.getGroupsCompleted() == 1);
+    CHECK (r.p.getGroupsPassed() == 0);
+    CHECK (r.p.expectedPitches() == ps ({ 61 }));
+}
+
+TEST_CASE ("Seeking makes playing along wait for a key again", "[player][learn][whileplaying]")
+{
+    ChordRun r (LearnStyle::WhilePlaying);
+    r.p.heardSomething();
+    r.run (0.5);
+    REQUIRE_FALSE (r.p.isWaiting());
+    r.p.seek (2.0);
+    r.run (0.5);
+    CHECK (r.p.isWaiting());
+    CHECK (r.p.expectedPitches() == ps ({ 64 }));
+    r.p.heardSomething();
+    CHECK (r.p.expectedPitches() == ps ({ 65 }));
+}
+
 TEST_CASE ("Freeplay ignores what's played", "[player]")
 {
     Rig r;
