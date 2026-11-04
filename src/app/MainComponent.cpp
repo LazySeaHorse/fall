@@ -1025,7 +1025,7 @@ void MainComponent::restoreSettings()
         rawMic       = s.getBoolValue ("rawMic", true);
         volume       = s.getDoubleValue ("volume", 1.0);
         sensitivity  = s.getDoubleValue ("sensitivity", 0.6);
-        earlyWindow  = s.getDoubleValue ("earlyWindow", 0.25);
+        earlyWindow  = s.getDoubleValue ("earlyWindow", 0.3);
         jumpLeadIn   = s.getDoubleValue ("jumpLeadIn", 1.0);
         lookahead    = s.getDoubleValue ("lookahead", 3.2);
         splitPitch   = s.getIntValue ("splitPitch", 60);

@@ -79,6 +79,7 @@ public:
         addRow (p, "Early tolerance", earlyWindow);
         setupSlider (earlyWindow, 0.0, 0.6, 0.01, [this] (double v) { if (onEarlyWindow) onEarlyWindow (v); });
         earlyWindow.textFromValueFunction = [] (double v) { return juce::String (juce::roundToInt (v * 1000)) + " ms"; };
+        hint (p, "A note counts if you play it up to this long before its chord reaches the key line, even if you haven't finished the chord before it.");
         addRow (p, "Jump lead-in", jumpLeadIn);
         setupSlider (jumpLeadIn, 0.0, 4.0, 0.1, [this] (double v) { if (onJumpLeadIn) onJumpLeadIn (v); });
         jumpLeadIn.textFromValueFunction = [] (double v) { return juce::String (v, 1) + " s"; };
