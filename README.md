@@ -14,6 +14,9 @@ connection.
   the song runs at its own speed while you play anything, however late or early, and stops once you
   have been silent for 1.5 s (or longer than the gap between chords). Any key sets it going again.
   Chords passed this way are not marked as missed.
+- **Everyone Piano scores.** Fall also opens `.eop` files (versions 2.00, 2.01 and 3.01). Version 2.00
+  files keep their hands; newer ones are split at the split point like a one-track MIDI file. Notes
+  Fall can't make sense of are skipped, and it tells you how many.
 - **Your own instruments.** Fall plays the song through any VST3 or older VST2 (.dll) instrument you
   have installed, such as Pianoteq, and keeps its preset between sessions. A small built-in piano covers the case
   where you haven't picked one.
@@ -44,7 +47,7 @@ connection.
 | L | Loop on or off |
 | M | Add a marker here |
 | , | Settings |
-| Ctrl+O | Open a MIDI file |
+| Ctrl+O | Open a MIDI or EOP file |
 
 Scroll over the waterfall to scrub (when paused). Ctrl+scroll zooms. You can also click keys on the
 on-screen piano: this counts as playing them, which is handy for trying Learn mode away from the

@@ -120,7 +120,7 @@ private:
     Toast toast;
     SettingsPanel settingsPanel;
 
-    IconButton openButton { icons::folder, "Open a MIDI file (Ctrl+O)" };
+    IconButton openButton { icons::folder, "Open a song (Ctrl+O)" };
     IconButton restartButton { icons::restart, "Back to the start (Home)" };
     IconButton loopButton { icons::loop, "Loop (L) - shift-drag the timeline to choose" };
     IconButton micButton { icons::mic, "Listen to my piano" };

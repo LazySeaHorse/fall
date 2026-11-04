@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "core/Eop.h"
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
@@ -63,7 +64,7 @@ LaunchOptions LaunchOptions::parse (const juce::StringArray& rawArgs)
             o.width = v.upToFirstOccurrenceOf ("x", false, true).getIntValue();
             o.height = v.fromFirstOccurrenceOf ("x", false, true).getIntValue();
         }
-        else if (a.endsWithIgnoreCase (".mid") || a.endsWithIgnoreCase (".midi"))
+        else if (a.endsWithIgnoreCase (".mid") || a.endsWithIgnoreCase (".midi") || a.endsWithIgnoreCase (".eop"))
             o.midi = juce::File::getCurrentWorkingDirectory().getChildFile (a);
     }
     if (o.scripted()) o.noAudio = true;
@@ -532,7 +533,7 @@ void MainComponent::paintOverChildren (juce::Graphics& g)
 
         g.setColour (juce::Colours::white.withAlpha (0.92f * alpha));
         g.setFont (theme::font (21.0f, theme::Weight::Semibold));
-        g.drawText (dragOver ? "Drop to open" : "Drop a MIDI file here", card.withTrimmedBottom (card.getHeight() * 0.42f).withTrimmedTop (24.0f),
+        g.drawText (dragOver ? "Drop to open" : "Drop a MIDI or EOP file here", card.withTrimmedBottom (card.getHeight() * 0.42f).withTrimmedTop (24.0f),
                     juce::Justification::centredBottom);
         g.setColour (juce::Colours::white.withAlpha (0.5f * alpha));
         g.setFont (theme::font (13.5f));
@@ -648,7 +649,8 @@ bool MainComponent::keyPressed (const juce::KeyPress& k)
 bool MainComponent::isInterestedInFileDrag (const juce::StringArray& files)
 {
     for (auto& f : files)
-        if (f.endsWithIgnoreCase (".mid") || f.endsWithIgnoreCase (".midi") || f.endsWithIgnoreCase (".kar"))
+        if (f.endsWithIgnoreCase (".mid") || f.endsWithIgnoreCase (".midi") || f.endsWithIgnoreCase (".kar")
+            || f.endsWithIgnoreCase (".eop"))
             return true;
     return false;
 }
@@ -662,9 +664,9 @@ void MainComponent::filesDropped (const juce::StringArray& files, int, int)
 
 void MainComponent::openFileChooser()
 {
-    auto chooser = std::make_shared<juce::FileChooser> ("Open a MIDI file",
+    auto chooser = std::make_shared<juce::FileChooser> ("Open a song (MIDI or Everyone Piano)",
         songFile.existsAsFile() ? songFile.getParentDirectory() : juce::File::getSpecialLocation (juce::File::userMusicDirectory),
-        "*.mid;*.midi;*.kar");
+        "*.mid;*.midi;*.kar;*.eop");
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                           [this, chooser] (const juce::FileChooser& fc) {
                               if (fc.getResult().existsAsFile()) loadFile (fc.getResult());
@@ -677,7 +679,9 @@ bool MainComponent::loadFile (const juce::File& f)
     juce::String error;
     ImportOptions io;
     io.splitPitch = splitPitch;
-    if (! loadMidiFile (f, *s, error, io))
+    juce::StringArray warnings; // what a forgiving import skipped
+    const bool eop = f.hasFileExtension ("eop");
+    if (! (eop ? loadEopFile (f, *s, error, io, &warnings) : loadMidiFile (f, *s, error, io)))
     {
         toast.show (error, juce::Colour (0xffff453a));
         return false;
@@ -703,7 +707,7 @@ bool MainComponent::loadFile (const juce::File& f)
 
     if (auto* w = dynamic_cast<juce::DocumentWindow*> (getTopLevelComponent()))
         w->setName ("Fall  -  " + song->title);
-    toast.show (song->title, theme::rightHand);
+    toast.show (warnings.isEmpty() ? song->title : song->title + kDot + warnings.joinIntoString (kDot), theme::rightHand);
     repaint();
     return true;
 }
