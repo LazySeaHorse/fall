@@ -17,6 +17,20 @@ enum class LearnStyle
     WhilePlaying   // play along: keep going while the player plays anything, stop when they stop
 };
 
+// How a strike completes a chord.
+enum class ChordRule
+{
+    AllNotes, // every note of the chord must be struck (on-screen keys)
+    AnyNote   // one note of the chord is enough (the microphone hears one note at a time)
+};
+
+// What a call to Player::notePlayed() did with the strike.
+struct PlayResult
+{
+    int      marker = -1;  // marker index if this was a jump-key press (and the song jumped), else -1
+    PitchSet accepted;     // the struck pitches that counted: toward a chord, or as a jump key
+};
+
 struct LoopSettings
 {
     bool   enabled     = false;
@@ -72,7 +86,9 @@ public:
     const std::vector<Marker>& getMarkers() const noexcept { return markers; }
     void setJumpLeadIn (double seconds) { jumpLeadIn = seconds; }
 
-    // How early (real seconds) a correct note may be played before its chord reaches the key line.
+    // How early (real seconds) a correct note may be struck before its chord reaches the key line.
+    // A strike counts toward the earliest undecided chord that contains its pitch and whose window
+    // it falls in, so notes for a chord after the one the song waits at are kept, not thrown away.
     void setEarlyWindow (double realSeconds) { earlyWindow = realSeconds; }
 
     // MostlyRight: a chord you haven't played is skipped (and counted as missed) once the song has
@@ -89,14 +105,20 @@ public:
     // Advance by numSamples of real time, writing instrument MIDI at sample offsets.
     void render (juce::MidiBuffer& out, int numSamples, double sampleRate);
 
-    // Notes heard from the real piano at one onset.
-    // Returns the marker index if this was a jump-key press (and jumps), otherwise -1.
-    int notePlayed (const PitchSet& pitches);
+    // Notes struck on the real piano (or clicked). `secondsAgo` is how long ago, in real seconds, the
+    // key was struck (the detector's reporting delay); 0 for clicks. The strike is timed by when it
+    // happened, not when it arrived. Each pitch counts toward at most one chord. A jump key seeks.
+    PlayResult notePlayed (const PitchSet& pitches, double secondsAgo = 0.0, ChordRule rule = ChordRule::AllNotes);
+
+    // Pitches of the undecided chords a strike could count toward right now or within the early
+    // window: the current chord plus later chords whose early window is open
+    // (g.time - earlyWindow * speed <= time). Empty outside learn mode.
+    PitchSet hintPitches() const noexcept;
 
     // Learn mode state.
     bool     isWaiting() const noexcept;
     PitchSet expectedPitches() const noexcept;  // current chord (empty outside learn mode)
-    PitchSet satisfiedPitches() const noexcept { return satisfied; }
+    PitchSet satisfiedPitches() const noexcept;  // struck notes of the current chord
     double   nextGroupTime() const noexcept;
     int      getGroupsCompleted() const noexcept { return groupsCompleted; }
     int      getGroupsSkipped() const noexcept { return groupsSkipped; }
@@ -112,7 +134,9 @@ private:
     void sendControllerStateAt (juce::MidiBuffer& out, int sampleOffset, double t);
     void emitRange (juce::MidiBuffer& out, double from, double to, double startSample, double samplesPerSongSecond);
     bool gateOpen() const noexcept;
-    void decided (bool played);    // record a chord as played or skipped, and move past it
+    void decided (bool played);    // record a chord as played or skipped, and move past it (and any
+                                   // following chords that were already struck in full)
+    bool isComplete (size_t group) const noexcept;
     void skipIfMostlyRight();
     bool mayPassWhilePlaying() const noexcept;
     double endTime() const noexcept;
@@ -127,7 +151,7 @@ private:
     double  speed         = 1.0;
     bool    playing       = false;
     double  time          = 0.0;
-    double  earlyWindow   = 0.25;
+    double  earlyWindow   = 0.3;
     double  jumpLeadIn    = 1.0;
 
     LoopSettings loop;
@@ -136,7 +160,7 @@ private:
     size_t nextNote    = 0; // next note-on to emit
     size_t nextControl = 0;
     size_t nextGroup   = 0; // next chord learn mode waits for
-    PitchSet satisfied;
+    std::vector<PitchSet> progress; // per chord: notes struck so far (also for chords not yet reached)
     int groupsCompleted = 0;
 
     LearnStyle style = LearnStyle::WaitEveryNote;

@@ -430,10 +430,10 @@ TEST_CASE ("Jump keys seek to their marker", "[player][markers]")
     r.p.setPlaying (true);
     r.run (0.1);
 
-    CHECK (r.p.notePlayed (ps ({ 21 })) == 0);
+    CHECK (r.p.notePlayed (ps ({ 21 })).marker == 0);
     CHECK_THAT (r.p.getTime(), WithinAbs (0.75, 1e-9));
     CHECK (r.p.expectedPitches() == ps ({ 76 }));
-    CHECK (r.p.notePlayed (ps ({ 22 })) == 1);
+    CHECK (r.p.notePlayed (ps ({ 22 })).marker == 1);
     CHECK_THAT (r.p.getTime(), WithinAbs (0.25, 1e-9));
 }
 

@@ -107,7 +107,10 @@ void Player::heardSomething()
 
 void Player::resync()
 {
-    satisfied.reset();
+    if (progress.size() != groups.size())
+        progress.assign (groups.size(), PitchSet {}); // only when the song or hands changed
+    else
+        std::fill (progress.begin(), progress.end(), PitchSet {});
     history = 0;
     waited = 0.0;
     lastHeard = kNever;
@@ -143,41 +146,105 @@ double Player::nextGroupTime() const noexcept
     return gateOpen() ? -1.0 : groups[nextGroup].time;
 }
 
-int Player::notePlayed (const PitchSet& pitches)
+PitchSet Player::satisfiedPitches() const noexcept
 {
+    return gateOpen() || nextGroup >= progress.size() ? PitchSet {} : progress[nextGroup];
+}
+
+PitchSet Player::hintPitches() const noexcept
+{
+    PitchSet hint;
+    if (gateOpen())
+        return hint;
+
+    hint = groups[nextGroup].pitches;
+    for (size_t i = nextGroup + 1; i < groups.size() && groups[i].time - earlyWindow * speed <= time + 1e-9; ++i)
+        hint |= groups[i].pitches;
+    return hint;
+}
+
+bool Player::isComplete (size_t group) const noexcept
+{
+    return group < groups.size() && (progress[group] & groups[group].pitches) == groups[group].pitches;
+}
+
+PlayResult Player::notePlayed (const PitchSet& pitches, double secondsAgo, ChordRule rule)
+{
+    PlayResult result;
+
     for (size_t i = 0; i < markers.size(); ++i)
     {
         const int p = markers[i].triggerPitch;
         if (p >= 0 && p < 128 && pitches.test ((size_t) p))
         {
             seek (markers[i].time - jumpLeadIn);
-            return (int) i;
+            result.marker = (int) i;
+            result.accepted.set ((size_t) p);
+            return result;
         }
     }
 
     if (gateOpen() || ! song)
-        return -1;
+        return result;
 
-    const auto& g = groups[nextGroup];
-    if (time < g.time - earlyWindow * speed)
-        return -1;
+    // Song time of the strike. While the song waits at a gate its clock stood still for `waited`
+    // real seconds, so only the rest of the delay moved the clock.
+    double strikeTime = time;
+    if (playing)
+    {
+        const double moving = std::max (0.0, secondsAgo - (isWaiting() ? waited : 0.0));
+        strikeTime = std::max (kMinTime, time - moving * speed);
+    }
 
-    satisfied |= (pitches & ~jumpKeys()) & g.pitches;
-    if ((satisfied & g.pitches) == g.pitches)
+    const PitchSet usable = pitches & ~jumpKeys();
+    const double window = earlyWindow * speed;
+
+    for (size_t p = 0; p < usable.size(); ++p)
+    {
+        if (! usable.test (p))
+            continue;
+
+        // The earliest chord with this pitch that the strike is in the window of (and doesn't
+        // already hold it), so one strike never counts twice.
+        for (size_t i = nextGroup; i < groups.size() && groups[i].time - window <= strikeTime + 1e-9; ++i)
+        {
+            if (! groups[i].pitches.test (p) || progress[i].test (p))
+                continue;
+
+            if (rule == ChordRule::AnyNote)
+                progress[i] = groups[i].pitches;
+            else
+                progress[i].set (p);
+            result.accepted.set (p);
+            break;
+        }
+    }
+
+    if (isComplete (nextGroup))
     {
         ++groupsCompleted;
         decided (true);
     }
-    return -1;
+    return result;
 }
 
 void Player::decided (bool played)
 {
-    history = ((history << 1) | (played ? 1u : 0u)) & 0x3ffu;
-    ++nextGroup;
-    satisfied.reset();
-    waited = 0.0;
-    lastPassed = clock;
+    // Moves past the current chord; a following chord that was already struck in full is
+    // completed too, however we got here.
+    for (;;)
+    {
+        history = ((history << 1) | (played ? 1u : 0u)) & 0x3ffu;
+        progress[nextGroup].reset();
+        ++nextGroup;
+        waited = 0.0;
+        lastPassed = clock;
+
+        if (! isComplete (nextGroup))
+            return;
+        played = true;
+        ++groupsCompleted;
+    }
 }
 
 bool Player::mayPassWhilePlaying() const noexcept
