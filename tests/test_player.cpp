@@ -661,3 +661,28 @@ TEST_CASE ("Passing a chord while playing along completes the next one if alread
     CHECK (r.p.getGroupsCompleted() == 1);
     CHECK (r.p.expectedPitches() == ps ({ 62 }));
 }
+
+TEST_CASE ("Hint pitches cover the current chord and chords inside the early window", "[player][learn][strike]")
+{
+    LearnRig r (makeNotes ({ { 60, 0.0 }, { 62, 0.15 }, { 64, 1.0 } }));
+    CHECK (r.p.hintPitches() == ps ({ 60, 62 }));
+    CHECK (r.p.expectedPitches() == ps ({ 60 }));
+
+    Rig f (makeNotes ({ { 60, 0.0 } })); // freeplay
+    CHECK (f.p.hintPitches().none());
+}
+
+TEST_CASE ("Accepted pitches are the ones that counted", "[player][learn][strike]")
+{
+    LearnRig r (makeNotes ({ { 60, 0.0 }, { 62, 0.15 }, { 64, 3.0 } }));
+    r.p.setMarkers ({ { 2.0, 21, "x" } });
+
+    CHECK (r.p.notePlayed (ps ({ 99 })).accepted.none());   // not in any chord
+    CHECK (r.p.notePlayed (ps ({ 64 })).accepted.none());   // outside every window
+    CHECK (r.p.notePlayed (ps ({ 60, 62, 99 })).accepted == ps ({ 60, 62 }));
+    CHECK (r.p.getGroupsCompleted() == 2);
+
+    const auto jump = r.p.notePlayed (ps ({ 21 }));
+    CHECK (jump.marker == 0);
+    CHECK (jump.accepted == ps ({ 21 }));
+}
