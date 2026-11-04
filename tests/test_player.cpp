@@ -3,6 +3,8 @@
 
 #include "core/Player.h"
 
+#include <algorithm>
+
 using namespace fall;
 using Catch::Matchers::WithinAbs;
 
@@ -478,4 +480,67 @@ TEST_CASE ("Re-striking a held pitch releases it first", "[player]")
     for (auto& e : r.events) offs += (! e.on && e.pitch == 60);
     CHECK (offs == 2);
     CHECK (r.onAt (60, 1) == 500);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Strikes for upcoming chords, honest timing and chord rules.
+
+namespace
+{
+// Right-hand single notes at the given (pitch, time) pairs, or a chord when times repeat.
+std::shared_ptr<Song> makeNotes (std::initializer_list<std::pair<int, double>> list)
+{
+    auto s = std::make_shared<Song>();
+    for (auto [pitch, start] : list)
+    {
+        Note n; n.pitch = pitch; n.start = start; n.end = start + 0.1; n.hand = Hand::Right;
+        s->notes.push_back (n);
+    }
+    std::sort (s->notes.begin(), s->notes.end(), [] (const Note& a, const Note& b) { return a.start < b.start; });
+    s->length = s->notes.back().end;
+    return s;
+}
+
+struct LearnRig : Rig
+{
+    explicit LearnRig (std::shared_ptr<Song> s) : Rig (std::move (s))
+    {
+        p.setMode (Mode::Learn);
+        p.setPracticeHands (HandRight);
+        p.setPlaying (true);
+        run (0.1);
+    }
+};
+} // namespace
+
+TEST_CASE ("A strike for the next close chord is kept when played before the current one", "[player][learn][strike]")
+{
+    LearnRig r (makeNotes ({ { 60, 0.0 }, { 62, 0.15 } }));
+    REQUIRE (r.p.isWaiting());
+
+    const auto early = r.p.notePlayed (ps ({ 62 }));
+    CHECK (early.accepted == ps ({ 62 }));
+    CHECK (r.p.getGroupsCompleted() == 0);
+    CHECK (r.p.isWaiting());
+
+    r.p.notePlayed (ps ({ 60 }));
+    CHECK (r.p.getGroupsCompleted() == 2); // 62 cleared at once from the earlier strike
+    r.run (0.5);
+    CHECK_FALSE (r.p.isWaiting()); // never stopped at 62
+    CHECK (r.p.getTime() > 0.15);
+}
+
+TEST_CASE ("One strike of a repeated pitch clears only one chord", "[player][learn][strike]")
+{
+    LearnRig r (makeNotes ({ { 60, 0.0 }, { 60, 0.2 } }));
+    const auto res = r.p.notePlayed (ps ({ 60 }));
+    CHECK (res.accepted == ps ({ 60 }));
+    CHECK (r.p.getGroupsCompleted() == 1);
+    r.run (0.5);
+    CHECK (r.p.isWaiting());
+    CHECK_THAT (r.p.getTime(), WithinAbs (0.2, 1e-9));
+    CHECK (r.p.expectedPitches() == ps ({ 60 }));
+
+    r.p.notePlayed (ps ({ 60 })); // the second strike clears the second chord
+    CHECK (r.p.getGroupsCompleted() == 2);
 }
