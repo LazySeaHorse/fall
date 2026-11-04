@@ -62,6 +62,7 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     detector.prepare (sampleRate, capacity);
     recorder.prepare (sampleRate);
     expectedGroups = -1; // re-send the expected chord to the fresh detector
+    hintSent = false;
     previewCollector.reset (sampleRate);
     fallback.prepare (sampleRate);
 
@@ -125,27 +126,39 @@ void AudioEngine::processBlock (const float* const* inputs, int numIn, float* co
             {
                 const auto& o = onsets[(size_t) i];
                 HeardEvent e;
-                e.pitches  = o.pitches | o.expectedHits | o.watchHits;
-                e.accepted = o.expectedHits | o.watchHits;
-                // The detector hears one note at a time, so one note of a chord completes the chord.
-                if (e.accepted.any())
-                    e.marker = player.notePlayed (o.expectedHits.any() ? (player.expectedPitches() | o.watchHits) : o.watchHits);
+                e.pitches = o.pitches | o.watchHits;
+                // Every heard note goes to the player, which decides from the strike time which chord (or
+                // jump key) it counts toward. The detector hears one note at a time, so one note of a chord
+                // is enough.
+                const double secondsAgo = (double) (o.reportedAt - o.samplePosition) / sampleRate;
+                const auto r = player.notePlayed (e.pitches, secondsAgo, ChordRule::AnyNote);
+                e.marker   = r.marker;
+                e.accepted = r.accepted;
                 // Any key but a jump key: lets the song run on (after notePlayed, so a correct note still
                 // completes its chord before heardSomething could pass it).
                 if ((e.pitches & ~player.jumpKeys()).any())
                     player.heardSomething();
                 e.wallMs    = juce::Time::getMillisecondCounterHiRes();
-                e.latencyMs = (float) (1000.0 * (double) (o.reportedAt - o.samplePosition) / sampleRate);
+                e.latencyMs = (float) (1000.0 * secondsAgo);
                 pushHeard (e);
                 recorder.logHeard (o.samplePosition, e.pitches, e.accepted, e.latencyMs);
             }
-            if (player.getGroupsCompleted() + player.getGroupsSkipped() + player.getGroupsPassed() != expectedGroups || player.nextGroupTime() != expectedGate)
+
+            // Detector hint: every chord a strike could count toward now (cheap bitset compare).
+            const PitchSet hint = player.hintPitches();
+            if (! hintSent || hint != hinted)
             {
-                expectedGroups = player.getGroupsCompleted() + player.getGroupsSkipped() + player.getGroupsPassed();
+                hinted = hint;
+                hintSent = true;
+                detector.setExpected (hint);
+            }
+            // The recording log keeps "what Fall expected": the current chord, when it changes.
+            const int groups = player.getGroupsCompleted() + player.getGroupsSkipped() + player.getGroupsPassed();
+            if (groups != expectedGroups || player.nextGroupTime() != expectedGate)
+            {
+                expectedGroups = groups;
                 expectedGate = player.nextGroupTime();
-                const PitchSet exp = player.expectedPitches();
-                detector.setExpected (exp);
-                recorder.logExpected (exp);
+                recorder.logExpected (player.expectedPitches());
             }
             detector.setWatchKeys (player.jumpKeys());
             inputDb.store (detector.getInputLevelDb());

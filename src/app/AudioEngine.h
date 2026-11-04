@@ -139,8 +139,9 @@ private:
     double sampleRate = 48000.0;
     int    blockSize = 512;
     int64_t streamPos = 0;
-    // The detector treats every setExpected() call after a hit as a new chord, so only call it when
-    // the chord the player waits for actually changes.
+    // Only call detector.setExpected() when the hint changes, and log the expected chord once per chord.
+    PitchSet hinted;
+    bool   hintSent = false;
     int    expectedGroups = -1;
     double expectedGate = -1e9;
     std::atomic<bool>  deviceRunning { false };
