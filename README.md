@@ -20,7 +20,7 @@ connection.
 - **Hearing your piano.** Fall listens for one note at a time, like a tuner. A note must be struck
   clearly above the room's own noise, so silence never counts, and must have a steady pitch, so
   snaps, claps and typing don't count either. This uses [aubio](https://aubio.org)'s pitch tracker.
-  Notes from C3 up are heard within about 40–90 ms. In a chord, playing one of its notes is enough.
+  Notes from C3 up are heard within about 40–90 ms. In a chord, playing one of its notes is enough. A note struck a little early (Settings, "Early tolerance", 0.3 s by default) counts toward the next chord, even before you have finished the one before it.
   Fall also works out your piano's tuning by itself. The keys it hears show on screen as pink dots,
   and if you play the right key in the wrong octave, Fall tells you.
 - **Jump keys.** Drop markers on the timeline (`M` or right-click) and bind each one to a piano

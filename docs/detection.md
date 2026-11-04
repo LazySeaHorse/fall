@@ -44,7 +44,7 @@ Every hop (256 samples at 48 kHz, about 5 ms):
    After a strike, the first pitch that stays within half a semitone for *need* hops (about 30 ms)
    is the note.
    - It is reported once: `DetectedOnset::pitches`.
-   - It counts for learn mode if the song is waiting for it: `expectedHits`.
+   - It is flagged `expectedHits` if it is one of the expected keys (a hint only; the player decides what counts).
    - Jump keys must hold twice as long: `watchHits`.
    - If nothing steady shows up within 500 ms, nothing is reported. Bass notes can take 150–250 ms.
 4. **Details:**
@@ -147,5 +147,5 @@ recall:
 ## Integration notes
 
 - Call `prepare()` with the device rate (tested at 44.1, 48 and 96 kHz). Any block size works.
-- Call `setExpected()` with the notes the song waits for, and `setWatchKeys()` with the jump keys.
-- Each report is one strike. Pass `expectedHits | watchHits` to the player.
+- Call `setExpected()` with every chord a strike could count toward (`Player::hintPitches()`: the current chord plus chords whose early window is open), and `setWatchKeys()` with the jump keys.
+- Each report is one strike. Pass `pitches | watchHits` to the player with the strike's age (`(reportedAt - samplePosition) / rate`) and `ChordRule::AnyNote`. The player decides from the strike time which chord, or jump key, it counts toward, so a note struck slightly early for the next chord is not lost.
