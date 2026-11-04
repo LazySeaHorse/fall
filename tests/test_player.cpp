@@ -604,3 +604,60 @@ TEST_CASE ("AnyNote completes a chord with one note, AllNotes needs them all", "
         CHECK (r.p.getGroupsCompleted() == 1);
     }
 }
+
+TEST_CASE ("Progress on a chord is cleared by a seek", "[player][learn][strike]")
+{
+    Rig r (makeNotes ({ { 60, 1.0 }, { 64, 1.0 } }));
+    r.p.setMode (Mode::Learn);
+    r.p.setPracticeHands (HandRight);
+    r.p.seek (0.8);
+    r.p.setPlaying (true);
+    r.run (0.1);
+
+    r.p.notePlayed (ps ({ 60 })); // early, inside the window
+    CHECK (r.p.satisfiedPitches() == ps ({ 60 }));
+    r.p.seek (0.8);
+    CHECK (r.p.satisfiedPitches().none());
+    r.p.notePlayed (ps ({ 64 }));
+    CHECK (r.p.satisfiedPitches() == ps ({ 64 }));
+    CHECK (r.p.getGroupsCompleted() == 0);
+}
+
+TEST_CASE ("Progress on an upcoming chord is cleared by a seek", "[player][learn][strike]")
+{
+    LearnRig r (makeNotes ({ { 60, 0.0 }, { 62, 0.15 } }));
+    r.p.notePlayed (ps ({ 62 }));
+    r.p.seek (0.0);
+    r.p.notePlayed (ps ({ 60 }));
+    CHECK (r.p.getGroupsCompleted() == 1); // 62 is not cleared by the stale strike
+    r.run (0.5);
+    CHECK (r.p.isWaiting());
+    CHECK (r.p.expectedPitches() == ps ({ 62 }));
+}
+
+TEST_CASE ("Skipping a chord completes the next one if it was already struck", "[player][learn][strike][forgiving]")
+{
+    ChordRun r (LearnStyle::MostlyRight);
+    r.p.setEarlyWindow (0.6);
+    r.playChords (8);
+    REQUIRE (r.p.expectedPitches() == ps ({ 68 }));
+
+    r.p.notePlayed (ps ({ 69 })); // the next chord, struck while we sit at this one
+    CHECK (r.p.getGroupsCompleted() == 8);
+    r.run (0.6);
+    CHECK (r.p.getGroupsSkipped() == 1);
+    CHECK (r.p.getGroupsCompleted() == 9);
+    CHECK (r.p.expectedPitches() == ps ({ 70 }));
+}
+
+TEST_CASE ("Passing a chord while playing along completes the next one if already struck", "[player][learn][strike][whileplaying]")
+{
+    ChordRun r (LearnStyle::WhilePlaying);
+    r.p.setEarlyWindow (0.6);
+    r.p.notePlayed (ps ({ 61 }));
+    CHECK (r.p.getGroupsCompleted() == 0);
+    r.p.heardSomething(); // passes chord 60
+    CHECK (r.p.getGroupsPassed() == 1);
+    CHECK (r.p.getGroupsCompleted() == 1);
+    CHECK (r.p.expectedPitches() == ps ({ 62 }));
+}
