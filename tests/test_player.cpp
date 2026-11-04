@@ -544,3 +544,63 @@ TEST_CASE ("One strike of a repeated pitch clears only one chord", "[player][lea
     r.p.notePlayed (ps ({ 60 })); // the second strike clears the second chord
     CHECK (r.p.getGroupsCompleted() == 2);
 }
+
+TEST_CASE ("Strikes are timed by when they happened, not when they were heard", "[player][learn][strike]")
+{
+    auto s = makeNotes ({ { 60, 1.0 } });
+    Rig r (s);
+    r.p.setMode (Mode::Learn);
+    r.p.setPracticeHands (HandRight);
+    r.p.seek (0.6);
+    r.p.setPlaying (true);
+    r.run (0.2); // t = 0.8; the window (0.3 s) opened at 0.7
+
+    r.p.notePlayed (ps ({ 60 }), 0.15); // struck at 0.65: too early
+    CHECK (r.p.getGroupsCompleted() == 0);
+    CHECK (r.p.satisfiedPitches().none());
+
+    r.p.notePlayed (ps ({ 60 }), 0.05); // struck at 0.75: inside
+    CHECK (r.p.getGroupsCompleted() == 1);
+}
+
+TEST_CASE ("The same late-reported strike counts when it is reported without delay", "[player][learn][strike]")
+{
+    Rig r (makeNotes ({ { 60, 1.0 } }));
+    r.p.setMode (Mode::Learn);
+    r.p.setPracticeHands (HandRight);
+    r.p.seek (0.6);
+    r.p.setPlaying (true);
+    r.run (0.2);
+    r.p.notePlayed (ps ({ 60 }), 0.0);
+    CHECK (r.p.getGroupsCompleted() == 1);
+}
+
+TEST_CASE ("While waiting, the delay is measured from the frozen clock", "[player][learn][strike]")
+{
+    // Waiting at 60 (t = 0) for 0.3 s: a strike reported 0.2 s ago happened while the song was
+    // already stopped, so it is timed at 0 and 62 (window opens at 0.3) is too early either way.
+    LearnRig r (makeNotes ({ { 60, 0.0 }, { 62, 0.4 } }));
+    r.run (0.3);
+    r.p.notePlayed (ps ({ 62 }), 0.2);
+    r.p.notePlayed (ps ({ 60 }), 0.2);
+    CHECK (r.p.getGroupsCompleted() == 1);
+    CHECK (r.p.satisfiedPitches().none());
+}
+
+TEST_CASE ("AnyNote completes a chord with one note, AllNotes needs them all", "[player][learn][strike]")
+{
+    {
+        LearnRig r (makeNotes ({ { 60, 0.0 }, { 64, 0.0 } }));
+        CHECK (r.p.notePlayed (ps ({ 60 }), 0.0, ChordRule::AnyNote).accepted == ps ({ 60 }));
+        CHECK (r.p.getGroupsCompleted() == 1);
+        CHECK_FALSE (r.p.isWaiting());
+    }
+    {
+        LearnRig r (makeNotes ({ { 60, 0.0 }, { 64, 0.0 } }));
+        r.p.notePlayed (ps ({ 60 }), 0.0, ChordRule::AllNotes);
+        CHECK (r.p.getGroupsCompleted() == 0);
+        CHECK (r.p.satisfiedPitches() == ps ({ 60 }));
+        r.p.notePlayed (ps ({ 64 }), 0.0, ChordRule::AllNotes);
+        CHECK (r.p.getGroupsCompleted() == 1);
+    }
+}
